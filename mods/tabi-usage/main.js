@@ -1,6 +1,6 @@
 // tabi-usage: plan usage (5-hour and weekly windows) of the Claude accounts and Codex on this computer.
 //   Accounts: "claude" (config dir ~/.claude) plus one per wrapper script ~/.local/bin/claude* that sets CLAUDE_CONFIG_DIR
-//           (e.g. claude2). They are published to every mod as shared("tabi.accounts"): [{ name, dir, default, bin }].
+//           (e.g. claude2; on Windows only .cmd, .bat or .ps1 wrappers count, never claude.exe). They are published to every mod as shared("tabi.accounts"): [{ name, dir, default, bin }].
 //   Claude: GET https://api.anthropic.com/api/oauth/usage with the Claude Code login of each account. The login is read
 //           ONCE per account (macOS Keychain item "Claude Code-credentials", or "Claude Code-credentials-<sha256(dir)[:8]>"
 //           for another config dir; elsewhere <dir>/.credentials.json), kept only in memory (`credential` below), sent only
@@ -16,7 +16,7 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { exec, appHome, home, notify, theme, shared, setShared, checking, window as herdrWindow } from "herdr";
 import { mayRead, minutesUntilNext, canReread, pickCredential, keychainOutcome, tokenExpired, parseClaudeUsage, afterReading,
-  windowView, usageLevel, ageLabel, renewShort, renewTooltip, ringFile, buildAccounts, keychainService, displayName,
+  windowView, usageLevel, ageLabel, renewShort, renewTooltip, ringFile, buildAccounts, buildWindowsAccounts, windowsWrapperName, keychainService, displayName,
   RATE_LIMIT_BACKOFF_MS, MIN_INTERVAL_MS } from "./lib.js";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -31,17 +31,36 @@ let accounts = null; // [{ name, dir, default }], found by scanAccounts
 let cache = null; // { claude: entry, claude2: entry, codex: entry }, loaded once from disk
 let busy = null;
 
+/** Windows: the wrapper scripts in ~/.local/bin (claude2.cmd, claude2.ps1...) that set CLAUDE_CONFIG_DIR, plus the default account. */
+async function scanWindowsAccounts(bin) {
+  let names;
+  try { names = await fs.readdir(bin); } catch { return buildWindowsAccounts([], home()); }
+  const files = [];
+  for (const file of names.filter((n) => windowsWrapperName(n))) {
+    try {
+      const text = await fs.readFile(`${bin}/${file}`, "utf8");
+      if (text.length <= 65536) files.push({ file, text }); // a wrapper is a few lines; anything big is not one
+    } catch { /* unreadable: not an account */ }
+  }
+  return buildWindowsAccounts(files, home());
+}
+
 /** Finds the accounts: the default one plus a wrapper in ~/.local/bin that sets CLAUDE_CONFIG_DIR, and tells every mod. */
 async function scanAccounts() {
   const bin = `${home()}/.local/bin`;
   const script = 'for f in "$1"/claude*; do n=${f##*/}; [ "$n" = claude ] && continue; [ -f "$f" ] || continue; l=$(grep -a -m1 "CLAUDE_CONFIG_DIR=" "$f" 2>/dev/null) || continue; printf "%s\\t%s\\n" "$n" "$l"; done';
   let found = accounts ?? buildAccounts("", home());
-  try {
-    const r = await exec("sh", ["-c", script, "accounts", bin], { timeout: 10000 });
-    if (r.code === 0) found = buildAccounts(r.stdout, home());
-  } catch { /* no shell: only the default account */ }
+  if (herdrWindow()?.platform === "windows") {
+    // No shell, no grep: the wrapper scripts (.cmd, .bat, .ps1) are read here. A binary such as claude.exe never counts.
+    try { found = await scanWindowsAccounts(bin); } catch { /* keep what was found */ }
+  } else {
+    try {
+      const r = await exec("sh", ["-c", script, "accounts", bin], { timeout: 10000 });
+      if (r.code === 0) found = buildAccounts(r.stdout, home());
+    } catch { /* no shell: only the default account */ }
+  }
   accounts = found;
-  const shown = found.map((a) => ({ name: a.name, dir: a.dir, default: a.default, bin: a.default ? "claude" : `${bin}/${a.name}` }));
+  const shown = found.map((a) => ({ name: a.name, dir: a.dir, default: a.default, bin: a.default ? "claude" : `${bin}/${a.file ?? a.name}` }));
   if (JSON.stringify(shared("tabi.accounts")) !== JSON.stringify(shown)) setShared("tabi.accounts", shown);
   return found;
 }
@@ -298,7 +317,9 @@ export default class TabiUsage extends View {
     const stale = entries.some((e) => e.error);
     const oldest = entries.length && entries.every((e) => e.okAt != null) ? Math.min(...entries.map((e) => e.okAt)) : null;
     const age = ageLabel(oldest, now);
-    const bar = h_flex().id("tabi-usage").size_full().items_center().gap(18).pl(84).pr(16).bg(t.chrome)
+    // macOS keeps room for its traffic lights; elsewhere the window buttons are on the right, so start at the edge.
+    const leftPad = herdrWindow()?.platform === "macos" ? 84 : 14;
+    const bar = h_flex().id("tabi-usage").size_full().items_center().gap(18).pl(leftPad).pr(16).bg(t.chrome)
       .on_click((_e, cx) => this.manual(cx))
       .child(h_flex().items_baseline().gap(8).flex_none()
         .child(div().text_size(15).text_color(t.foreground).child("旅"))

@@ -154,6 +154,36 @@ test("accounts: the default first, wrappers by name", () => {
     [["claude", "/h/.claude", true], ["claude2", "/h/.c2", false], ["claude3", "/h/.c3", false]]);
   assert.deepEqual(buildAccounts("", "/h").map((a) => a.name), ["claude"]);
 });
+import { parseWindowsWrapper, windowsWrapperName, buildWindowsAccounts } from "./lib.js";
+test("windows wrapper: set in cmd/bat and $env in ps1, with %USERPROFILE%, $HOME, quotes", () => {
+  const home = "C:\\Users\\x";
+  assert.deepEqual(parseWindowsWrapper("claude2", 'set "CLAUDE_CONFIG_DIR=%USERPROFILE%\\.c2"', home), { name: "claude2", dir: "C:\\Users\\x\\.c2" });
+  assert.deepEqual(parseWindowsWrapper("c3", "@set CLAUDE_CONFIG_DIR=D:\\cfg\\c3\\ ", home), { name: "c3", dir: "D:\\cfg\\c3" });
+  assert.deepEqual(parseWindowsWrapper("c4", '$env:CLAUDE_CONFIG_DIR = "$HOME\\.c4"', home), { name: "c4", dir: "C:\\Users\\x\\.c4" });
+  assert.deepEqual(parseWindowsWrapper("c5", "$env:CLAUDE_CONFIG_DIR='~/.c5'", home), { name: "c5", dir: "C:\\Users\\x/.c5" });
+  assert.equal(parseWindowsWrapper("c6", "claude %*", home), null);
+  assert.equal(parseWindowsWrapper("c7", 'set "CLAUDE_CONFIG_DIR=%OTHER%\\.c7"', home), null); // a variable not resolved here
+  assert.equal(parseWindowsWrapper("c8", 'export CLAUDE_CONFIG_DIR="$HOME/.c8"', home), null); // a POSIX line is not a Windows wrapper
+});
+test("windows wrapper files: only .cmd, .bat and .ps1 starting with claude; never claude.exe or plain claude", () => {
+  assert.deepEqual(["claude2.cmd", "claude-work.PS1", "claude3.bat"].map(windowsWrapperName), ["claude2", "claude-work", "claude3"]);
+  for (const f of ["claude.exe", "claude", "claude.cmd", "claude.ps1", "claude2.exe", "claude2", "other.cmd", "claude2.cmd.bak"]) assert.equal(windowsWrapperName(f), null, f);
+});
+test("windows accounts: the default first, wrappers by name, one account per name, binaries ignored", () => {
+  const files = [
+    { file: "claude2.ps1", text: '$env:CLAUDE_CONFIG_DIR = "$HOME\\.c2-ps1"\nclaude @args' },
+    { file: "claude2.cmd", text: '@echo off\r\nset "CLAUDE_CONFIG_DIR=%USERPROFILE%\\.c2"\r\nclaude %*' },
+    { file: "claude1.bat", text: "@echo off\r\nclaude %*" }, // sets no config dir: not an account
+    { file: "claude.exe", text: 'set "CLAUDE_CONFIG_DIR=C:\\x"' }, // a binary: never
+    { file: "claude9.cmd", text: 'set "CLAUDE_CONFIG_DIR=C:\\nine"' },
+  ];
+  assert.deepEqual(buildWindowsAccounts(files, "C:\\Users\\x").map((a) => [a.name, a.dir, a.default, a.file]), [
+    ["claude", "C:\\Users\\x/.claude", true, undefined],
+    ["claude2", "C:\\Users\\x\\.c2", false, "claude2.cmd"],
+    ["claude9", "C:\\nine", false, "claude9.cmd"],
+  ]);
+  assert.deepEqual(buildWindowsAccounts([], "C:\\Users\\x").map((a) => a.name), ["claude"]);
+});
 test("keychain service: plain for the default, suffixed with the dir hash for the others", () => {
   assert.equal(keychainService({ default: true }, "de4e3d40"), "Claude Code-credentials");
   assert.equal(keychainService({ default: false }, "de4e3d40"), "Claude Code-credentials-de4e3d40");
