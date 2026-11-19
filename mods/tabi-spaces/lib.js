@@ -35,7 +35,7 @@ export function duplicateNames(spaces) {
 
 /**
  * The small second line: the branch, or the path when there is none. Spaces that share a name show their path
- * and a number instead (the branch is usually the same), so they can be told apart: "…/Projects/PitLane · #2".
+ * and a number instead (the branch is usually the same), so they can be told apart: "…/sitios/PitLane · #2".
  */
 export function subline(space, where, dupes, homeDir, ordinal = 1) {
   const path = shortPath(where ?? space.folder, homeDir);

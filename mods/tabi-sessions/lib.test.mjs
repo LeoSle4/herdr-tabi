@@ -60,7 +60,7 @@ test("ago and folderName", () => {
 test("folderName: a very short last name comes with the folder above (Codex chat folders)", () => {
   assert.equal(folderName("/Users/a/Documents/Codex/2026-11-17/ti"), "2026-11-17/ti");
   assert.equal(folderName("/Users/a/Documents/Codex/2026-10-13/h"), "2026-10-13/h");
-  assert.equal(folderName("/Users/a/Documents/Projects/echoes-sle"), "echoes-sle");
+  assert.equal(folderName("/Users/a/Projects/echoes-sle"), "echoes-sle");
   assert.equal(folderName("C:\\Users\\a\\Codex\\2026-10-12\\con"), "2026-10-12/con");
   assert.equal(folderName("/ab"), "ab");
   assert.equal(folderName(""), "");
