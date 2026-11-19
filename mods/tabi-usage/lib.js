@@ -158,13 +158,51 @@ export function parseWrapper(name, line, home) {
   return raw ? { name, dir: raw } : null;
 }
 
+/** The account a Windows wrapper (.cmd, .bat or .ps1) makes, from one line of it:
+ *    set "CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude2"      (cmd, bat)
+ *    $env:CLAUDE_CONFIG_DIR = "$HOME\.claude2"            (ps1)
+ *  -> { name, dir }. Null when the line sets no CLAUDE_CONFIG_DIR, or the folder uses a variable that is not resolved here. */
+export function parseWindowsWrapper(name, line, home) {
+  const m = /^\s*(?:@?set\s+"?CLAUDE_CONFIG_DIR=([^"\r\n]*)"?|\$env:CLAUDE_CONFIG_DIR\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+)))/i.exec(line ?? "");
+  if (!m) return null;
+  const raw = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim()
+    .replace(/%USERPROFILE%|%HOME%|\$\{?env:USERPROFILE\}?|\$\{?env:HOME\}?|\$\{HOME\}|\$HOME/gi, () => home)
+    .replace(/^~(?=[\\/]|$)/, home)
+    .replace(/[\\/]+$/, "");
+  return raw && !/%|\$/.test(raw) ? { name, dir: raw } : null;
+}
+
+/** "claude2.cmd" -> "claude2". Only .cmd, .bat and .ps1 files whose name starts with "claude" are wrapper candidates:
+ *  never a binary (claude.exe), and never plain "claude", which is the default account. Null for anything else. */
+export function windowsWrapperName(file) {
+  const m = /^(claude.*)\.(?:cmd|bat|ps1)$/i.exec(file ?? "");
+  return m && m[1].toLowerCase() !== "claude" ? m[1] : null;
+}
+
+const withDefault = (wrappers, home) =>
+  [{ name: "claude", dir: `${home}/.claude`, default: true }, ...wrappers.sort((a, b) => a.name.localeCompare(b.name)).map((w) => ({ ...w, default: false }))];
+
 /** Output of the wrapper scan, "name<TAB>line" per file, into accounts: claude (the default) first, then the wrappers by name. */
 export function buildAccounts(scanOut, home) {
-  const wrappers = (scanOut ?? "").split("\n")
+  return withDefault((scanOut ?? "").split("\n")
     .map((l) => { const i = l.indexOf("\t"); return i < 0 ? null : parseWrapper(l.slice(0, i), l.slice(i + 1), home); })
-    .filter(Boolean)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  return [{ name: "claude", dir: `${home}/.claude`, default: true }, ...wrappers.map((w) => ({ ...w, default: false }))];
+    .filter(Boolean), home);
+}
+
+/** Windows: the wrapper files found in ~/.local/bin, [{ file, text }], into accounts. The first line of a file that sets
+ *  CLAUDE_CONFIG_DIR decides; a name taken by two files (claude2.cmd and claude2.ps1) is one account, the first file by name.
+ *  Each account keeps its `file`, which is what has to be run to start it. */
+export function buildWindowsAccounts(files, home) {
+  const byName = new Map();
+  for (const { file, text } of [...(files ?? [])].sort((a, b) => a.file.localeCompare(b.file))) {
+    const name = windowsWrapperName(file);
+    if (!name || byName.has(name)) continue;
+    for (const line of String(text ?? "").split(/\r?\n/)) {
+      const w = parseWindowsWrapper(name, line, home);
+      if (w) { byName.set(name, { ...w, file }); break; }
+    }
+  }
+  return withDefault([...byName.values()], home);
 }
 
 /** Keychain service Claude Code uses for an account: the default has the plain name, others get a suffix made of

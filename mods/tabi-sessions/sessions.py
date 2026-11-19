@@ -7,6 +7,7 @@
 #   Claude: ~/.claude/projects/*/*.jsonl (the CLI transcripts), with titles from the Claude desktop
 #           app's session files when that app is installed (optional: missing folders are skipped).
 #   Codex:  state_5.sqlite, opened read-only.
+import datetime
 import glob
 import json
 import os
@@ -144,27 +145,42 @@ def strip_verbatim(path):
     return path[4:] if path and path.startswith("\\\\?\\") else (path or "")
 
 
+def codex_title(name, title, first_message, preview, last_ms):
+    """The name Codex gave the thread, else its title, else the first user message (cut to one line), else
+    "Sin título · <date>" (just "Sin título" when the thread has no date)."""
+    text = one_line(name or title or first_message or preview)
+    if text:
+        return text
+    if last_ms:
+        return "Sin título · " + datetime.datetime.fromtimestamp(last_ms / 1000).strftime("%Y-%m-%d")
+    return "Sin título"
+
+
 def codex_sessions():
     db = os.path.join(CODEX_HOME, "state_5.sqlite")
     if not os.path.isfile(db):
         return []
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
     try:
+        # first_user_message is not in every Codex version: ask for it only when the table has it.
+        columns = {row[1] for row in con.execute("pragma table_info(threads)")}
+        first = "first_user_message" if "first_user_message" in columns else "null"
         rows = con.execute(
-            """select id, name, title, preview, cwd, recency_at_ms, updated_at_ms, is_pinned
+            f"""select id, name, title, {first}, preview, cwd, recency_at_ms, updated_at_ms, is_pinned
                from threads
                where archived = 0 and source in ('cli', 'vscode') and (thread_source is null or thread_source = 'user')"""
         ).fetchall()
     finally:
         con.close()
     out = []
-    for tid, name, title, preview, cwd, recency, updated, pinned in rows:
+    for tid, name, title, first_message, preview, cwd, recency, updated, pinned in rows:
         cwd = strip_verbatim(cwd)
+        last = recency or updated or 0
         out.append({
             "id": tid,
-            "title": one_line(name or title or preview),
+            "title": codex_title(name, title, first_message, preview, last),
             "cwd": cwd,
-            "last": recency or updated or 0,
+            "last": last,
             "folder": bool(cwd) and os.path.isdir(cwd),
             "native_pin": bool(pinned),
             "desktop": False,
