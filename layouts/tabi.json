@@ -1,0 +1,222 @@
+{
+  "id": "root",
+  "type": "column",
+  "resizable": false,
+  "divider": {
+    "width": 1,
+    "color": "border"
+  },
+  "titlebar": "none",
+  "traffic_lights": [
+    14,
+    11
+  ],
+  "theme": "tabi",
+  "font": "JetBrains Mono",
+  "font_size": 13,
+  "ui_font": "Geist",
+  "terminal_padding": [
+    14,
+    16
+  ],
+  "terminal_opacity": 0,
+  "background": "canvas",
+  "children": [
+    {
+      "id": "usage",
+      "type": "block",
+      "content": {
+        "mod": "tabi-usage"
+      },
+      "size": {
+        "px": 34
+      },
+      "window_drag": true
+    },
+    {
+      "id": "body",
+      "type": "row",
+      "resizable": false,
+      "divider": {
+        "width": 1,
+        "color": "border"
+      },
+      "children": [
+        {
+          "id": "sidebar",
+          "type": "column",
+          "size": {
+            "px": 240
+          },
+          "min": 240,
+          "max": 240,
+          "background": "chrome",
+          "resizable": false,
+          "divider": {
+            "width": 1,
+            "color": "border"
+          },
+          "children": [
+            {
+              "id": "spaces",
+              "type": "block",
+              "content": {
+                "mod": "tabi-spaces"
+              },
+              "size": {
+                "px": 102
+              }
+            },
+            {
+              "id": "party",
+              "type": "block",
+              "content": {
+                "mod": "tabi-party"
+              },
+              "size": {
+                "px": 192
+              }
+            },
+            {
+              "id": "sessions",
+              "type": "block",
+              "content": {
+                "mod": "tabi-sessions",
+                "props": {
+                  "agents": [
+                    "claude",
+                    "codex"
+                  ]
+                }
+              },
+              "size": {
+                "px": 70
+              }
+            },
+            {
+              "id": "now",
+              "type": "block",
+              "content": {
+                "mod": "tabi-panel"
+              },
+              "size": {
+                "weight": 1
+              }
+            }
+          ]
+        },
+        {
+          "id": "work",
+          "type": "column",
+          "resizable": false,
+          "children": [
+            {
+              "id": "tabs",
+              "type": "block",
+              "content": {
+                "mod": "tabi-tabs"
+              },
+              "size": {
+                "px": 42
+              }
+            },
+            {
+              "id": "work-body",
+              "type": "row",
+              "background": {
+                "image": "backgrounds/tabi/08.jpg",
+                "fit": "cover"
+              },
+              "floating": [
+                {
+                  "id": "fondo",
+                  "content": {
+                    "mod": "tabi-backdrop"
+                  },
+                  "edge": "top",
+                  "align": "end"
+                }
+              ],
+              "children": [
+                {
+                  "id": "main",
+                  "type": "block",
+                  "content": {
+                    "tab": "active",
+                    "pane": {
+                      "gap": 6,
+                      "radius": 8,
+                      "background": "#0d1014c4",
+                      "lone": true,
+                      "border": {
+                        "width": 0.5,
+                        "color": "border"
+                      },
+                      "focus": {
+                        "width": 1,
+                        "color": "accent"
+                      },
+                      "header": {
+                        "content": {
+                          "mod": "pane"
+                        },
+                        "height": 28,
+                        "position": "top",
+                        "reveal": "always"
+                      }
+                    }
+                  }
+                },
+                {
+                  "id": "panel",
+                  "type": "column",
+                  "hidden": true,
+                  "size": {
+                    "px": 473
+                  },
+                  "children": [
+                    {
+                      "id": "panel-body",
+                      "type": "stack",
+                      "children": [
+                        {
+                          "id": "files",
+                          "type": "block",
+                          "content": {
+                            "mod": "tabi-files"
+                          }
+                        },
+                        {
+                          "id": "changes",
+                          "type": "block",
+                          "content": {
+                            "mod": "tabi-changes"
+                          }
+                        }
+                      ],
+                      "active": "changes"
+                    }
+                  ],
+                  "padding": [
+                    6,
+                    6
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "status",
+              "type": "block",
+              "content": {
+                "mod": "tabi-status"
+              },
+              "size": {
+                "px": 28
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
