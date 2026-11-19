@@ -12,7 +12,7 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, spaces, panes, focused, exec, run, openOverlay, props, shared, layout, appHome, settings, theme, checking } from "herdr";
+import { agents, spaces, panes, focused, exec, run, openOverlay, props, shared, layout, appHome, settings, theme, checking, window as herdrWindow } from "herdr";
 import { accountNames, pending, agoShort, changeSummary, parseLastCommit, parseAhead, filesLabel } from "./lib.js";
 
 const AMBER = "#d9a441";
@@ -46,6 +46,7 @@ export default class TabiPanel extends View {
     this.compact = false;
     this.natural = 0; // the full panel's own height, measured while it is shown
     this.windowH = 0;
+    this.outerH = 0; // this block's own current height (Windows sizing, see control)
     if (checking()) return;
     this.refresh(cx);
     cx.timer.every(60000, (cx) => this.refresh(cx));
@@ -68,9 +69,18 @@ export default class TabiPanel extends View {
   control(cx) {
     const need = shared("tabi.sessions.need");
     const root = layout();
-    const fixed = ["usage", "spaces", "party"].map((id) => nodeSize(root, id)?.px);
-    if (!(need > 0 && this.windowH > 0 && this.natural > 0) || fixed.some((v) => !(v >= 0))) return;
-    const room = this.windowH - fixed.reduce((a, b) => a + b, 0) - ROOM_MARGIN;
+    let room;
+    if (herdrWindow()?.platform === "windows") {
+      // window.json keeps the restored bounds while the window is maximized, so it cannot be trusted here. The room the
+      // sessions and this block share is constant, whatever the split: their two current heights add up to it.
+      const sessionsH = shared("tabi.sessions.h");
+      if (!(need > 0 && this.natural > 0 && sessionsH > 0 && this.outerH > 0)) return;
+      room = sessionsH + this.outerH;
+    } else {
+      const fixed = ["usage", "spaces", "party"].map((id) => nodeSize(root, id)?.px);
+      if (!(need > 0 && this.windowH > 0 && this.natural > 0) || fixed.some((v) => !(v >= 0))) return;
+      room = this.windowH - fixed.reduce((a, b) => a + b, 0) - ROOM_MARGIN;
+    }
     let sessions, panel, compact = false;
     if (need + this.natural <= room) { sessions = { px: need }; panel = { weight: 1 }; }
     else if (MIN_SESSIONS + this.natural <= room) { sessions = { px: Math.floor(room - this.natural) }; panel = { px: this.natural }; }
@@ -213,7 +223,7 @@ export default class TabiPanel extends View {
     if (keyOf() !== this.key) this.refresh(cx);
     const t = theme();
     const root = v_flex().id("tabi-panel").size_full().bg(t.chrome).border_t(0.5).border_color(t.border).overflow_hidden().justify_end()
-;
+      .on_size_change((size) => { this.outerH = Math.round(size.height); });
     if (this.compact && !this.popup) return root.child(this.compactRow(t));
     // Natural height measured here, so the controller knows how much room the full panel needs.
     return root.child(v_flex().id("tabi-panel-body").flex_none().w_full().gap(8).p(10)
