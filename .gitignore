@@ -1,0 +1,67 @@
+# herdr-tabi: only the "tabi" layout and what it needs. Everything else in this folder is Herdr's own or personal.
+
+# --- Herdr writes these on every start (types, docs, bookkeeping) ---
+AGENTS.md
+*.d.ts
+jsconfig.json
+/installed.json
+/update-notes.json
+/update-notes-media/
+
+# --- Herdr's shipped interface: replaced whole on every start (clone with mod.clone / layout.clone to change it) ---
+/frame/
+/icons/
+/mods/*
+!/mods/tabi-*/
+/layouts/*
+!/layouts/tabi.json
+/themes/*
+!/themes/tabi.json
+
+# --- Data and state: usage numbers and account e-mail, pins, portrait/backdrop assignments, window and selection state ---
+/data/
+/shared.json
+/seen.json
+/view.json
+/window.json
+/windows.json
+*.sock
+
+# --- Personal media and generated pictures ---
+# backgrounds/tabi is made by mods/tabi-backdrop/prepare.py from ~/Documents/fondos/optimizados
+/backgrounds/
+# link to ~/Documents/retratos: recreate it with  ln -s ~/Documents/retratos mods/tabi-party/retratos
+/mods/tabi-party/retratos
+
+# --- Caches, logs, error and backup files Herdr or the tools leave behind ---
+*.log
+*.error
+*.corrupt-*
+*.reset-*
+*.old-*
+*.bak
+*.tmp
+*.cache
+.cache/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+
+# --- Anything that can hold tokens or credentials ---
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*credential*
+*secret*
+*token*
+id_rsa*
+id_ed25519*
+.netrc
+
+# --- Local publishing scripts ---
+/.pr/
