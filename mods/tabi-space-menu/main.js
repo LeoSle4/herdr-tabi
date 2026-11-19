@@ -1,12 +1,60 @@
-// tabi-space-menu: what the "+" of the spaces list opens. "~ inicio", the 6 most recently modified projects of
-// ~/Documents/Projects and "Elegir carpeta…" (the system's folder picker). A folder that already has a space is not
+// tabi-space-menu: what the "+" of the spaces list opens. "~ inicio", the 6 most recently modified projects of the
+// project folders and "Elegir carpeta…" (the system's folder picker). A folder that already has a space is not
 // duplicated: that space is shown and a short note says so.
+// Project folders: the "projectFolders" list of <app home>/tabi.json, e.g. { "projectFolders": ["~/Projects", "D:\\Code"] }
+// ("~" and %USERPROFILE% work at the start). Without it: ~/Projects, then ~/Documents/Projects (on Windows also the real,
+// possibly OneDrive-redirected, Documents). Only the ones that exist count, and a folder that is a symlink or junction
+// to an earlier one is skipped, so no project shows twice.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, home, run, exec, notify, pickFolder, closeOverlay, props, theme, checking } from "herdr";
-import { findSpaceByFolder, recentFromLs } from "./lib.js";
+import { spaces, panes, home, appHome, run, exec, readTextFile, notify, pickFolder, closeOverlay, props, theme, checking, window as herdrWindow } from "herdr";
+import { findSpaceByFolder, recentFromPaths, shellQuote, projectFolders, usableFolders } from "./lib.js";
 
-const projectsDir = () => `${home()}/Documents/Projects`;
+const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
+const run10s = { timeout: 10000 };
+
+// Windows PowerShell writes to a pipe in the OEM code page, which garbles names like "Música" or "Año": ask for UTF-8.
+const PS_UTF8 = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; ";
+const powershell = (script) => exec("powershell", ["-NoProfile", "-NonInteractive", "-Command", PS_UTF8 + script], run10s);
+
+let documents = null; // the answer for this session: where Documents is does not change
+/** The real Documents folder (OneDrive moves it on many Windows installs), or null. */
+function windowsDocuments() {
+  documents ??= powershell("[Environment]::GetFolderPath('MyDocuments')")
+    .then((r) => (r.code === 0 ? r.stdout.trim() || null : null))
+    .catch(() => null);
+  return documents;
+}
+
+/** "<index>\t<real path>" for each folder that exists, so a symlink or junction to another folder can be told apart. */
+async function resolveFolders(folders, windows) {
+  const r = windows
+    ? await powershell(
+        `$i = 0; foreach ($p in @(${folders.map(psQuote).join(",")})) { $i++; ` +
+        "if (Test-Path -LiteralPath $p -PathType Container) { $it = Get-Item -LiteralPath $p; " +
+        "$t = if ($it.LinkType) { @($it.Target)[0] } else { $null }; " +
+        "if ($t -and -not [System.IO.Path]::IsPathRooted($t)) { $t = Join-Path $it.Parent.FullName $t }; " + // relative link target
+        "[string]$i + [char]9 + $(if ($t) { $t } else { $it.FullName }) } }")
+    : await exec("sh", ["-c",
+        `i=0; for r in "$@"; do i=$((i+1)); [ -d "$r" ] && printf '%s\\t%s\\n' "$i" "$(cd "$r" && pwd -P)"; done`, "sh", ...folders], run10s);
+  return r.stdout;
+}
+
+/** The newest projects across the project folders: [{ name, path }]. */
+async function loadRecent() {
+  const windows = herdrWindow()?.platform === "windows";
+  const config = await readTextFile(`${appHome()}/tabi.json`).catch(() => null);
+  const wanted = projectFolders(config, home(), windows ? await windowsDocuments() : null);
+  const roots = usableFolders(wanted, await resolveFolders(wanted, windows));
+  if (!roots.length) return [];
+  // One listing for all the folders, so the order is by modification time across them.
+  const r = windows
+    ? await powershell(
+        `Get-ChildItem -Directory -LiteralPath @(${roots.map(psQuote).join(",")}) -ErrorAction SilentlyContinue | ` +
+        "Sort-Object LastWriteTime -Descending | ForEach-Object { $_.FullName }")
+    : await exec("sh", ["-c", `ls -1tpd -- ${roots.map((d) => `${shellQuote(d)}/*/`).join(" ")} 2>/dev/null`], run10s);
+  return recentFromPaths(r.stdout, 6);
+}
 
 /** Where a space is now: the folder of its first terminal, else the folder it was made in. */
 function whereOf(s) {
@@ -21,9 +69,7 @@ export default class TabiSpaceMenu extends View {
     if (checking()) return;
     cx.spawn(async (cx) => {
       try {
-        // `ls -t` already sorts by modification time, newest first, and marks folders with "/".
-        const r = await exec("ls", ["-1tp", projectsDir()], { timeout: 10000 });
-        if (r.code === 0) this.recent = recentFromLs(r.stdout, projectsDir(), 6);
+        this.recent = await loadRecent();
       } catch { /* no projects folder: only the other two entries */ }
       cx.notify();
     });

@@ -6,10 +6,10 @@ const HOME = "/Users/x";
 const sp = (o) => ({ name: "x", named: false, folder: "/x", branch: null, ...o });
 
 test("paths: home becomes ~, long ones keep the last two folders", () => {
-  assert.equal(tildePath("/Users/x/Documents/Projects/PitLane", HOME), "~/Documents/Projects/PitLane");
+  assert.equal(tildePath("/Users/x/Projects/sitios/PitLane", HOME), "~/Projects/sitios/PitLane");
   assert.equal(tildePath("/Users/x", HOME), "~");
   assert.equal(tildePath("/opt/app", HOME), "/opt/app");
-  assert.equal(shortPath("/Users/x/Documents/Projects/PitLane", HOME), "…/Projects/PitLane");
+  assert.equal(shortPath("/Users/x/Projects/sitios/PitLane", HOME), "…/sitios/PitLane");
   assert.equal(shortPath("/Users/x/x", HOME), "~/x");
 });
 
@@ -24,9 +24,9 @@ test("duplicate names are found; their rows show the path and a number", () => {
   const list = [sp({ name: "PitLane" }), sp({ name: "PitLane" }), sp({ name: "~" })];
   const dupes = duplicateNames(list);
   assert.deepEqual([...dupes], ["PitLane"]);
-  const where = "/Users/x/Documents/Projects/PitLane";
-  assert.equal(subline(sp({ name: "PitLane", branch: "main" }), where, dupes, HOME, 1), "…/Projects/PitLane · #1");
-  assert.equal(subline(sp({ name: "PitLane", branch: "main" }), where, dupes, HOME, 2), "…/Projects/PitLane · #2");
+  const where = "/Users/x/Projects/sitios/PitLane";
+  assert.equal(subline(sp({ name: "PitLane", branch: "main" }), where, dupes, HOME, 1), "…/sitios/PitLane · #1");
+  assert.equal(subline(sp({ name: "PitLane", branch: "main" }), where, dupes, HOME, 2), "…/sitios/PitLane · #2");
   assert.equal(subline(sp({ name: "api", branch: "feat/x" }), "/p/api", dupes, HOME), "feat/x"); // unique: the branch
   assert.equal(subline(sp({ name: "api" }), "/Users/x/api", dupes, HOME), "~/api"); // no branch: the path
 });
