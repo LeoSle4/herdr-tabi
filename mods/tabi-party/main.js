@@ -5,11 +5,11 @@
 // anything else is named in a notification and ignored). Each agent gets one at random when it appears, by the unique id of
 // its pane (not by its account), and keeps it while it lives (data/tabi/portraits.json); a new agent gets one that no
 // visible agent has, they repeat only when there are more agents than images, and a closed agent frees its portrait. New images are found on their own (every 15 s). Each is cut to a centered square thumbnail
-// (data/tabi/portraits/, with macOS `sips`) and the card clips it in a circle. No images: a neutral figure.
+// (data/tabi/portraits/, with macOS `sips`, or portraits.ps1 on Windows) and the card clips it in a circle. No images: a neutral figure.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, home, run, theme, checking, layout, appHome, exec, shared, notify } from "herdr";
+import { agents, home, run, theme, checking, layout, appHome, exec, shared, notify, window as herdrWindow } from "herdr";
 import { statusInfo, accountNames, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
@@ -17,6 +17,10 @@ const srcDir = () => `${home()}/Documents/retratos`;
 const thumbDir = () => `${appHome()}/data/tabi/portraits`;
 const assignFile = () => `${appHome()}/data/tabi/portraits.json`;
 const num = (text, key) => Number(new RegExp(`${key}:\\s*(\\d+)`).exec(text)?.[1]);
+// Windows has no sips, stat or file: portraits.ps1 (PowerShell, System.Drawing) lists the folder and cuts the thumbnails.
+const onWindows = () => herdrWindow()?.platform === "windows";
+const powershell = (...args) =>
+  exec("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", `${appHome()}/mods/tabi-party/portraits.ps1`, ...args], { timeout: 30000 });
 
 const W = 216;
 const H = 64;
@@ -80,17 +84,22 @@ export default class TabiParty extends View {
     try {
       await fs.mkdir(thumbDir(), { recursive: true });
       if (!(await fs.exists(out))) {
-        const info = (await exec("sips", ["-g", "pixelWidth", "-g", "pixelHeight", src], { timeout: 20000 })).stdout;
-        const side = cropSide(num(info, "pixelWidth"), num(info, "pixelHeight"));
-        const tmp = `${out}.tmp.png`;
-        await exec("sips", ["-s", "format", "png", "--cropToHeightWidth", String(side), String(side), src, "--out", tmp], { timeout: 20000 });
-        await exec("sips", ["-Z", String(THUMB), tmp, "--out", out], { timeout: 20000 });
-        try { await fs.unlink(tmp); } catch { /* already gone */ }
+        if (onWindows()) {
+          await powershell("-Mode", "thumb", "-Src", src, "-Out", out, "-Size", String(THUMB));
+        } else {
+          const info = (await exec("sips", ["-g", "pixelWidth", "-g", "pixelHeight", src], { timeout: 20000 })).stdout;
+          const side = cropSide(num(info, "pixelWidth"), num(info, "pixelHeight"));
+          const tmp = `${out}.tmp.png`;
+          await exec("sips", ["-s", "format", "png", "--cropToHeightWidth", String(side), String(side), src, "--out", tmp], { timeout: 20000 });
+          await exec("sips", ["-Z", String(THUMB), tmp, "--out", out], { timeout: 20000 });
+          try { await fs.unlink(tmp); } catch { /* already gone */ }
+        }
         if (!(await fs.exists(out))) throw new Error("no thumbnail");
       }
       return `data/tabi/portraits/${thumbName(file, mtime)}`;
     } catch {
-      return `mods/tabi-party/retratos/${file}`;
+      // Windows has no ~/Documents link inside the mod: no thumbnail means the neutral figure (and a new try on the next scan).
+      return onWindows() ? null : `mods/tabi-party/retratos/${file}`;
     }
   }
 
@@ -98,6 +107,13 @@ export default class TabiParty extends View {
    *  the files that are ignored. One `stat` and one `file` per file through the shell (the engine's fs has neither);
    *  without a shell, the plain directory listing and no times. */
   async listFolder() {
+    if (onWindows()) {
+      // PowerShell lists the files with their times and, for those without extension, their png/jpeg signature.
+      try {
+        const r = await powershell("-Mode", "list", "-Dir", srcDir());
+        if (r.code === 0) return parseFolder(r.stdout);
+      } catch { /* no PowerShell: the plain listing below */ }
+    }
     const script = 'for f in "$1"/*; do [ -f "$f" ] || continue; m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0); t=$(file -b --mime-type "$f" 2>/dev/null); printf "%s\\t%s\\t%s\\n" "$m" "${f##*/}" "$t"; done';
     try {
       const r = await exec("sh", ["-c", script, "retratos", srcDir()], { timeout: 20000 });
@@ -120,7 +136,7 @@ export default class TabiParty extends View {
       const next = new Map();
       for (const { file, mtime } of images) {
         const old = this.thumbs.get(file);
-        next.set(file, old && old.mtime === mtime ? old : { path: await this.makeThumb(file, mtime), mtime });
+        next.set(file, old && old.mtime === mtime && old.path ? old : { path: await this.makeThumb(file, mtime), mtime });
       }
       const sameFiles = [...next.keys()].join("\n") === [...this.thumbs.keys()].join("\n");
       const samePaths = sameFiles && [...next].every(([f, v]) => v.path === this.thumbs.get(f)?.path);
