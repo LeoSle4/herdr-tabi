@@ -2,7 +2,7 @@
 
     python3 tools/tabi_subagents.py install [--config-dir DIR]      (also: uninstall, status)
 
-Edits <config dir>/settings.json (default: $CLAUDE_CONFIG_DIR, else ~/.claude) and touches only the three entries that run
+Edits <config dir>/settings.json (default: $CLAUDE_CONFIG_DIR, else ~/.claude) and touches only the entries that run
 tabi_subagents.py; the first time it saves a copy as settings.json.tabi-backup.
 """
 import json
@@ -12,7 +12,7 @@ import sys
 
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tabi_subagents.py")
 MARK = "tabi_subagents.py"
-EVENTS = ("SubagentStart", "SubagentStop", "SessionEnd")
+EVENTS = ("SubagentStart", "SubagentStop", "Stop", "Notification", "SessionEnd")
 
 
 def default_config_dir():

@@ -42,6 +42,14 @@ class Settings(Tmp):
             self.assertTrue(entry["hooks"][0]["async"])
             self.assertIn(ts.MARK, entry["hooks"][0]["command"])
 
+    def test_an_old_install_with_three_events_gets_the_two_new_ones(self):
+        ts.install(self.root)
+        data = read(self.settings())
+        del data["hooks"]["Stop"], data["hooks"]["Notification"]
+        self.write(data)
+        self.assertEqual(ts.install(self.root), ["Stop", "Notification"])
+        self.assertTrue(all(ts.status(self.root).values()))
+
     def test_install_twice_changes_nothing_the_second_time(self):
         ts.install(self.root)
         before = text(self.settings())
@@ -54,7 +62,8 @@ class Settings(Tmp):
         ts.install(self.root)
         data = read(self.settings())
         self.assertEqual(data["model"], "opus")
-        self.assertEqual(data["hooks"]["Stop"], [other])
+        self.assertEqual(data["hooks"]["Stop"][0], other)  # somebody else's Stop hook stays first and untouched
+        self.assertEqual(len(data["hooks"]["Stop"]), 2)
         self.assertEqual(data["hooks"]["SubagentStop"][0], other)
         self.assertEqual(len(data["hooks"]["SubagentStop"]), 2)
         self.assertEqual(read(self.settings() + ".tabi-backup")["model"], "opus")
@@ -92,7 +101,7 @@ class Settings(Tmp):
         data = read(self.settings())
         del data["hooks"]["SessionEnd"]
         self.write(data)
-        self.assertEqual(ts.status(self.root), {"SubagentStart": True, "SubagentStop": True, "SessionEnd": False})
+        self.assertEqual(ts.status(self.root), {"SubagentStart": True, "SubagentStop": True, "Stop": True, "Notification": True, "SessionEnd": False})
 
     def test_a_settings_file_that_is_not_an_object_is_refused(self):
         with open(self.settings(), "w", encoding="utf-8") as f:

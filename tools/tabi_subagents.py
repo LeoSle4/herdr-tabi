@@ -1,10 +1,11 @@
 """Sub-agents on the agent cards of tabi.
 
-Claude Code runs this as a hook (SubagentStart, SubagentStop, SessionEnd). It records each sub-agent of the Claude session
-that lives in a Herdr terminal (its id is in HC_TERMINAL_ID), one small JSON file per sub-agent, so the tabi-party mod can
-draw them under the card of their agent:
+Claude Code runs this as a hook (SubagentStart, SubagentStop, Stop, Notification, SessionEnd). It records, for the Claude
+session that lives in a Herdr terminal (its id is in HC_TERMINAL_ID), what tabi shows on the agent's card:
 
-    <state>/<terminal id>/<agent id>.json     {"type", "status": "running" | "done", "started", "ended", "summary"}
+    <state>/<terminal id>/<agent id>.json     a sub-agent: {"type", "status": "running" | "done", "started", "ended", "summary"}
+    <state>/<terminal id>/_stop.json          how the last turn ended: {"text", "at"} (first line of the final answer)
+    <state>/<terminal id>/_notification.json  what it is waiting for: {"text", "at"} (a permission prompt, a question)
 
 The same command installs the hooks into Claude's settings.json (the work is in tabi_hooks.py):
 
@@ -24,6 +25,9 @@ KEEP_DONE_S = 600  # a finished sub-agent's file is deleted after 10 minutes
 STALE_S = 7200  # a "running" one older than 2 hours is left over from a crash
 MAX_FILES = 30
 MAX_SUMMARY = 100
+MAX_SAID = 140  # the first line of a final answer or of a notification
+# Notification types that mean the agent waits for the person (not "idle_prompt", which is only a reminder).
+WAITING = ("permission_prompt", "elicitation_dialog", "agent_needs_input")
 
 
 def state_root():
@@ -36,12 +40,12 @@ def safe(name):
     return "" if cleaned.strip(".") == "" else cleaned
 
 
-def summarize(text):
-    """First non-empty line of what the sub-agent said last, squeezed to one short line."""
+def summarize(text, limit=MAX_SUMMARY):
+    """First non-empty line of a text, squeezed to one short line."""
     for line in str(text or "").splitlines():
         line = " ".join(line.split())
         if line:
-            return line if len(line) <= MAX_SUMMARY else line[: MAX_SUMMARY - 1] + "…"
+            return line if len(line) <= limit else line[: limit - 1] + "…"
     return ""
 
 
@@ -71,6 +75,10 @@ def prune(folder, now_ms):
         rec = _read(path)
         if rec is None:
             continue
+        if name.startswith("_"):  # what the agent said: not a sub-agent, only dropped when very old
+            if isinstance(rec.get("at"), (int, float)) and (now_ms - rec["at"]) / 1000 > STALE_S:
+                os.remove(path)
+            continue
         done = rec.get("status") == "done"
         stamp = rec.get("ended") if done else rec.get("started")
         age = (now_ms - stamp) / 1000 if isinstance(stamp, (int, float)) else 0
@@ -80,6 +88,16 @@ def prune(folder, now_ms):
             entries.append((rec.get("started") or 0, path))
     for _, path in sorted(entries, reverse=True)[MAX_FILES:]:
         os.remove(path)
+
+
+def _said(folder, file, text, now_ms):
+    """Records the first line of what the agent said (nothing when there is no text) and when."""
+    line = summarize(text, MAX_SAID)
+    if not line:
+        return
+    os.makedirs(folder, exist_ok=True)
+    _write(os.path.join(folder, file), {"text": line, "at": now_ms})
+    prune(folder, now_ms)
 
 
 def handle(event, terminal, root=None, now_ms=None):
@@ -93,6 +111,13 @@ def handle(event, terminal, root=None, now_ms=None):
     folder = os.path.join(root, terminal)
     if name == "SessionEnd":
         shutil.rmtree(folder, ignore_errors=True)
+        return
+    if name == "Stop":
+        _said(folder, "_stop.json", event.get("last_assistant_message"), now_ms)
+        return
+    if name == "Notification":
+        if event.get("notification_type") in WAITING:
+            _said(folder, "_notification.json", event.get("message"), now_ms)
         return
     agent_id = safe(event.get("agent_id"))
     if name not in ("SubagentStart", "SubagentStop") or not agent_id:
