@@ -4,7 +4,7 @@
 # and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
 set -eu
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 REPO="${TABI_REPO:-https://github.com/LeoSle4/herdr-tabi.git}"
 BRANCH="${TABI_BRANCH:-main}"
 
@@ -65,12 +65,86 @@ cmd_update() {
   git -C "$dir" fetch -q origin "$BRANCH" || die "could not fetch $REPO ($BRANCH)"
   git -C "$dir" merge -q --ff-only "origin/$BRANCH" || die "your $BRANCH diverged from origin/$BRANCH: resolve it by hand"
   after=$(git -C "$dir" rev-parse HEAD)
+  refresh_self "$dir"
   if [ "$before" = "$after" ]; then
     say "Already up to date ($(git -C "$dir" rev-parse --short HEAD))"
   else
     say "Updated $(git -C "$dir" rev-parse --short "$before") -> $(git -C "$dir" rev-parse --short "$after")"
     restart_notice
   fi
+}
+
+ask_extras() {
+  # Offer the terminal extras after an install. Flags decide without asking; with no terminal to ask on, never ask.
+  [ "$no_shell" = 1 ] && return 1
+  [ "$with_shell" = 1 ] && return 0
+  ( : < /dev/tty ) 2>/dev/null || return 1
+  printf 'Install the terminal extras (Starship prompt, autocompletion, zoxide, fzf, eza, bat)? [y/N] ' > /dev/tty
+  read -r answer < /dev/tty || return 1
+  case $answer in y | Y | yes | YES | s | S | si | SI | sí) return 0 ;; *) return 1 ;; esac
+}
+
+install_packages() {
+  if ! command -v brew >/dev/null 2>&1; then
+    say "Homebrew was not found: install these with your package manager: starship zoxide fzf eza bat zsh-autosuggestions zsh-syntax-highlighting"
+    return
+  fi
+  for pkg in starship zoxide fzf eza bat zsh-autosuggestions zsh-syntax-highlighting; do
+    brew list --formula "$pkg" >/dev/null 2>&1 && continue
+    say "Installing $pkg with Homebrew"
+    brew install "$pkg" || say "could not install $pkg: install it by hand"
+  done
+  # A Nerd Font for terminals that do not draw the branch symbol themselves (Ghostty and Herdr already do).
+  if [ "$(uname -s)" = Darwin ] && ! brew list --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
+    say "Installing the JetBrainsMono Nerd Font with Homebrew"
+    brew install --cask font-jetbrains-mono-nerd-font || say "could not install the Nerd Font: install it by hand"
+  fi
+}
+
+wire_rc() {
+  dir=$1
+  case $(basename "${SHELL:-}") in
+    zsh) rc="$HOME/.zshrc" ;;
+    bash) rc="$HOME/.bashrc" ;;
+    *) say "Your shell is not zsh or bash: add these two lines to its startup file:"
+       printf 'export TABI_SHELL_DIR="%s/shell"\n[ -f "$TABI_SHELL_DIR/profile.sh" ] && . "$TABI_SHELL_DIR/profile.sh"\n' "$dir"
+       return ;;
+  esac
+  start='# >>> tabi shell >>>'
+  end='# <<< tabi shell <<<'
+  touch "$rc"
+  [ -e "$rc.tabi-backup" ] || cp -p "$rc" "$rc.tabi-backup"
+  if ! grep -qF "$start" "$rc" && grep -qE 'starship init|zoxide init' "$rc"; then
+    say "Note: $rc already starts Starship or zoxide by itself; the tabi block is harmless, but you can drop your own lines."
+  fi
+  # Drop an earlier tabi block, then add the current one at the end (syntax highlighting must load last).
+  tmp=$(mktemp)
+  awk -v s="$start" -v e="$end" '$0 == s { skip = 1 } !skip { print } $0 == e { skip = 0 }' "$rc" > "$tmp"
+  {
+    cat "$tmp"
+    printf '%s\nexport TABI_SHELL_DIR="%s/shell"\n[ -f "$TABI_SHELL_DIR/profile.sh" ] && . "$TABI_SHELL_DIR/profile.sh"\n%s\n' "$start" "$dir" "$end"
+  } > "$rc"
+  rm -f "$tmp"
+  say "Updated $rc (your previous copy is $rc.tabi-backup)"
+}
+
+cmd_shell() {
+  dir=$1
+  [ -f "$dir/shell/profile.sh" ] || die "$dir/shell/profile.sh not found: run 'tabi update' first"
+  [ "$no_install" = 1 ] || install_packages
+  wire_rc "$dir"
+  say "Open a new terminal to see it."
+}
+
+# A command installed by install.sh (in ~/.local/bin) follows the repository; one managed by Homebrew does not.
+refresh_self() {
+  dir=$1
+  bindir="${TABI_BIN:-$HOME/.local/bin}"
+  me=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || return 0
+  [ "$me" = "$(cd "$bindir" 2>/dev/null && pwd)" ] || return 0
+  [ -f "$dir/bin/tabi" ] || return 0
+  cmp -s "$dir/bin/tabi" "$me/tabi" && return 0
+  cp "$dir/bin/tabi" "$me/tabi.new" && chmod +x "$me/tabi.new" && mv "$me/tabi.new" "$me/tabi" && say "Updated the tabi command"
 }
 
 cmd_status() {
@@ -86,11 +160,14 @@ usage() {
   cat <<EOF
 tabi $VERSION: install and update the tabi layout for Herdr
 
-Usage: tabi <command> [--dir <folder>]
+Usage: tabi <command> [--dir <folder>] [--with-shell | --no-shell]
 
 Commands:
-  install   Set up tabi in the Herdr config folder (updates it if already installed)
+  install   Set up tabi in the Herdr config folder (updates it if already installed), then offer the
+            terminal extras; --with-shell accepts them without asking, --no-shell skips the question
   update    Pull the latest version (fast-forward only; refuses if you have local edits)
+  shell     Install the terminal extras (Starship, zoxide, fzf, eza, bat, zsh plugins) and wire your
+            ~/.zshrc or ~/.bashrc; --no-install only wires the file
   status    Show the folder, the installed version and what is missing
   version   Print the tool version
 
@@ -101,15 +178,22 @@ EOF
 command=${1:-help}
 [ $# -gt 0 ] && shift
 dir=$(default_dir)
+with_shell=0
+no_shell=0
+no_install=0
 while [ $# -gt 0 ]; do
   case $1 in
     --dir) [ $# -ge 2 ] || die "--dir needs a folder"; dir=$2; shift 2 ;;
+    --with-shell) with_shell=1; shift ;;
+    --no-shell) no_shell=1; shift ;;
+    --no-install) no_install=1; shift ;;
     *) die "unknown option: $1" ;;
   esac
 done
 
 case $command in
-  install) cmd_install "$dir" ;;
+  install) cmd_install "$dir"; if ask_extras; then cmd_shell "$dir"; fi ;;
+  shell) cmd_shell "$dir" ;;
   update) cmd_update "$dir" ;;
   status) cmd_status "$dir" ;;
   version|--version|-v) echo "tabi $VERSION" ;;

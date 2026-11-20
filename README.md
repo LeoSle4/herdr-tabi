@@ -28,7 +28,8 @@ curl -fsSL https://raw.githubusercontent.com/LeoSle4/herdr-tabi/main/install.sh 
 irm https://raw.githubusercontent.com/LeoSle4/herdr-tabi/main/install.ps1 | iex
 ```
 
-Open Herdr once before installing so its config folder exists, then restart Herdr after the install.
+Open Herdr once before installing so its config folder exists, then restart Herdr after the install. At the end,
+`tabi install` asks whether to install the terminal extras (see below).
 
 ## Update
 
@@ -36,9 +37,9 @@ Open Herdr once before installing so its config folder exists, then restart Herd
 tabi update
 ```
 
-It fast-forwards to the latest version and tells you to restart Herdr. It refuses, without changing anything, if you
-edited a tracked file or are on another branch. To update the `tabi` command itself: `brew upgrade tabi`, or run the
-one-line installer again.
+It fast-forwards to the latest version, refreshes the `tabi` command itself when it came from the one-line installer, and
+tells you to restart Herdr. It refuses, without changing anything, if you
+edited a tracked file or are on another branch. If you installed the command with Homebrew, `brew upgrade tabi` updates it.
 
 ## Commands
 
@@ -46,6 +47,7 @@ one-line installer again.
 |---|---|
 | `tabi install` | Sets tabi up in the Herdr config folder. On an installed folder it behaves like `update`. |
 | `tabi update` | Pulls the latest version. |
+| `tabi shell` | Installs the terminal extras and wires your shell (see below). |
 | `tabi status` | Shows the folder, the installed version and anything missing (git, Python). |
 | `tabi version` | Prints the tool version. |
 
@@ -79,6 +81,22 @@ It mirrors the macOS zsh setup:
 
 Herdr's terminal already uses JetBrains Mono, the same font as Ghostty. If the branch symbol shows as an empty box in
 another terminal, set "JetBrainsMono Nerd Font" there.
+
+## Terminal extras on macOS and Linux
+
+```bash
+tabi shell
+```
+
+(`tabi install --with-shell` accepts without asking, `--no-shell` skips the question, `tabi shell --no-install` only wires
+the shell file.) With Homebrew it installs what is missing of Starship, zoxide, fzf, eza, bat, zsh-autosuggestions and
+zsh-syntax-highlighting (and, on macOS, the JetBrainsMono Nerd Font), then adds one block to `~/.zshrc` or `~/.bashrc`.
+Without Homebrew it lists what to install. The block loads `shell/profile.sh`, so `tabi update` changes the setup
+without touching your rc file again; a copy of the original is kept as `<rc>.tabi-backup`.
+
+It is the same setup as on Windows: the Starship prompt (a `~/.config/starship.toml` of your own wins), `z <part>`,
+Ctrl+R and Ctrl+T with fzf, and `ls`, `ll` and `cat` through eza and bat. In zsh it adds history suggestions (Right arrow
+accepts) and syntax highlighting; bash has no inline suggestions. Other shells get the two lines to add by hand.
 
 ## What an install touches
 
