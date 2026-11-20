@@ -1,23 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseConfig, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, FRESH_MS } from "./notify.js";
+import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, FRESH_MS } from "./notify.js";
 
 const agent = (address, status, extra = {}) => ({ address, status, app: "claude-code", space_name: "herdr-tabi", ...extra });
 const TOPIC = "tabi-0123456789ab";
 
 test("config: a topic is enough for the phone, the rest has defaults", () => {
-  assert.deepEqual(parseConfig(`{"topic":"${TOPIC}"}`), { server: "https://ntfy.sh", topic: TOPIC, desktop: false, on: ["blocked", "done"], details: false });
+  assert.deepEqual(parseConfig(`{"topic":"${TOPIC}"}`), { server: "https://ntfy.sh", topic: TOPIC, desktop: false, on: ["blocked", "done"], details: false, debug: false });
 });
 
 test("config: desktop alone is enough, with no topic", () => {
-  assert.deepEqual(parseConfig('{"desktop":true}'), { server: "https://ntfy.sh", topic: null, desktop: true, on: ["blocked", "done"], details: false });
+  assert.deepEqual(parseConfig('{"desktop":true}'), { server: "https://ntfy.sh", topic: null, desktop: true, on: ["blocked", "done"], details: false, debug: false });
   assert.equal(parseConfig('{"desktop":false}'), null);
   assert.equal(parseConfig('{"desktop":"yes"}'), null);
 });
 
 test("config: server, events and details are read", () => {
   const c = parseConfig(`{"topic":"${TOPIC}","desktop":true,"server":"https://ntfy.example.com:8443/","on":["blocked","nonsense"],"details":true}`);
-  assert.deepEqual(c, { server: "https://ntfy.example.com:8443", topic: TOPIC, desktop: true, on: ["blocked"], details: true });
+  assert.deepEqual(c, { server: "https://ntfy.example.com:8443", topic: TOPIC, desktop: true, on: ["blocked"], details: true, debug: false });
 });
 
 test("config: anything unsafe or incomplete turns the feature off", () => {
@@ -98,4 +98,21 @@ test("desktopCommand: one program per platform, the text only ever as arguments"
   assert.equal(win.command, "powershell");
   assert.deepEqual(win.args.slice(-6), ["-File", "C:\\h\\tools\\desktop-notify.ps1", "-Title", "T", "-Body", "B"]);
   assert.deepEqual(desktopCommand("linux", "-T", "B"), { command: "notify-send", args: ["--app-name=Herdr", "--", "-T", "B"] });
+});
+
+test("config: debug is opt-in", () => {
+  assert.equal(parseConfig('{"desktop":true,"debug":true}').debug, true);
+  assert.equal(parseConfig('{"desktop":true,"debug":"yes"}').debug, false);
+});
+
+test("appendLog: stamped lines, one per entry, newest last, capped", () => {
+  const t0 = Date.UTC(2026, 10, 20, 15, 7, 9);
+  const one = appendLog("", "queued t1d -> done", t0);
+  assert.equal(one, "15:07:09 queued t1d -> done\n");
+  assert.equal(appendLog(one, "delivered", t0 + 1000), "15:07:09 queued t1d -> done\n15:07:10 delivered\n");
+  assert.equal(appendLog("", "a\n  b\tc", t0), "15:07:09 a b c\n"); // one line per entry
+  let text = "";
+  for (let i = 0; i < 100; i++) text = appendLog(text, `line ${i}`, t0, 5);
+  assert.deepEqual(text.trim().split("\n").map((l) => l.slice(9)), ["line 95", "line 96", "line 97", "line 98", "line 99"]);
+  assert.equal(appendLog("", "x".repeat(900), t0).length, 9 + 300 + 1); // a long line is cut
 });

@@ -170,6 +170,7 @@ Subscribe to the topic in the ntfy app. All the options:
 | `server` | Your own ntfy server (`https://` only) | `https://ntfy.sh` |
 | `on` | `["blocked", "done"]`, or just one of them | both |
 | `details` | `true`: the **phone** push carries the character and the first line of what the agent said. Off, it only says the program and the status | `false` |
+| `debug` | `true`: writes what happens (a change noticed, whether the window was active, the exit code of the command) to `data/tabi/notify.log`, the last 80 lines. For finding out why nothing shows | `false` |
 
 **Privacy.** The desktop notification never leaves your machine. With `details` on, the first line (140 characters) of the agent's
 last answer is sent to the ntfy server, which on ntfy.sh belongs to somebody else: use your own server, or leave `details` off
@@ -180,6 +181,9 @@ everything off instead of sending anywhere.
 `python3 tools/tabi_subagents.py install`, and it is available for agents that run **on the machine that sends the notification**.
 For an agent of another machine, or for Codex, the notification says the character and the space but not what it said. A change
 waits up to 8 seconds for its text and goes without it after that.
+
+If nothing shows, add `"debug": true` to `notify.json`, make an agent finish a turn while you are in another application, and read
+`data/tabi/notify.log`: it says whether the change was seen, whether Herdr counted as the active window, and how the command ended.
 
 Enable the **phone** on one machine only: every Herdr app sees every machine's agents, so two machines would send the same
 alert twice. Messages go through `curl`, which Windows includes. To change the sounds themselves, see below.

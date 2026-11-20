@@ -17,7 +17,8 @@ export const WAIT_TRIES = 8;
  *     "topic": "tabi-<random>",              a push to the phone through ntfy (the topic is the only secret on ntfy.sh)
  *     "server": "https://ntfy.sh",           your own ntfy server (https only)
  *     "on": ["blocked", "done"],
- *     "details": false }                     true: the push carries the character and the first line of what it said
+ *     "details": false,                      true: the push carries the character and the first line of what it said
+ *     "debug": false }                       true: writes what happens to data/tabi/notify.log (to find out why nothing shows)
  * Returns null (everything off) when the file is not JSON, has neither `desktop` nor a good topic, or the topic is too
  * guessable or the server is not https: a typo must never send the messages somewhere else.
  */
@@ -38,7 +39,7 @@ export function parseConfig(text) {
   }
   if (!topic && !desktop) return null;
   const on = Array.isArray(c.on) ? c.on.filter((e) => EVENTS.includes(e)) : EVENTS;
-  return { server, topic, desktop, on, details: c.details === true };
+  return { server, topic, desktop, on, details: c.details === true, debug: c.debug === true };
 }
 
 /** Address -> status, for the agents of one reading. */
@@ -105,4 +106,12 @@ export function desktopCommand(platform, title, body, options = {}) {
     return { command: "powershell", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", options.script, "-Title", title, "-Body", body] };
   }
   return { command: "notify-send", args: ["--app-name=Herdr", "--", title, body] };
+}
+
+/** The last `keep` lines of a log with `line` added, each stamped with the time. Newest last. */
+export function appendLog(text, line, now, keep = 80) {
+  const stamp = new Date(now).toISOString().slice(11, 19);
+  const lines = String(text ?? "").split("\n").filter(Boolean);
+  lines.push(`${stamp} ${String(line).replace(/\s+/g, " ").slice(0, 300)}`);
+  return lines.slice(-keep).join("\n") + "\n";
 }
