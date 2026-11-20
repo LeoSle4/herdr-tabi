@@ -72,5 +72,8 @@ id_ed25519*
 # --- Private notes: they live in a private repository, never here ---
 ECOSISTEMA.md
 
+# --- gentle-ai writes its skill registry in every project where an agent runs ---
+/.atl/
+
 # --- Local publishing scripts ---
 /.pr/
