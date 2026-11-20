@@ -5,7 +5,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, focused, theme, shared, machines, run, exec, appHome, home, window as herdrWindow } from "herdr";
-import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
+import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, cardMessage, portraitOf, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -88,6 +88,20 @@ export default class TabiStatus extends View {
     }
   }
 
+  /** Runs a notification command and says how it went: { ok, detail }. */
+  async show(c) {
+    try {
+      const r = await exec(c.command, c.args, { timeout: 15000 });
+      this.log(`desktop ${c.command} exit=${r.code} ${r.stdout ?? ""}${r.stderr ?? ""}`);
+      // A notification that went through prints nothing: terminal-notifier can exit 0 and still say it was refused.
+      const quiet = !String(r.stderr ?? "").trim() && !(c.command === "terminal-notifier" && String(r.stdout ?? "").trim());
+      return { ok: r.code === 0 && quiet, detail: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    } catch (e) {
+      this.log(`desktop ${c.command} failed: ${e}`);
+      return { ok: false, detail: String(e) };
+    }
+  }
+
   async deliver(agent, said, cfg) {
     if (!cfg) return;
     const name = nameOf(agent, shared("tabi.party"));
@@ -99,10 +113,16 @@ export default class TabiStatus extends View {
       if (platform === "macos" && this.terminalNotifier === undefined) {
         this.terminalNotifier = await exec("sh", ["-c", "command -v terminal-notifier"], { timeout: 5000 }).then((r) => r.code === 0, () => false);
       }
-      const m = localMessage(agent, name, said);
-      const c = desktopCommand(platform, m.title, m.body, { terminalNotifier: this.terminalNotifier, script: `${appHome()}/tools/desktop-notify.ps1` });
-      await exec(c.command, c.args, { timeout: 15000 })
-        .then((r) => this.log(`desktop ${c.command} exit=${r.code} ${r.stderr ?? ""}`), (e) => this.log(`desktop ${c.command} failed: ${e}`));
+      const card = cardMessage(agent, name, said, portraitOf(shared("tabi.party"), agent.address, appHome()));
+      const options = { terminalNotifier: this.terminalNotifier && cfg.notifier !== "osascript", script: `${appHome()}/tools/desktop-notify.ps1` };
+      let c = desktopCommand(platform, card, options);
+      let result = await this.show(c);
+      // terminal-notifier can be installed and still refused by macOS (no permission yet): osascript is the other way in.
+      if (!result.ok && c.command === "terminal-notifier") {
+        this.log("desktop terminal-notifier did not work: trying osascript");
+        c = desktopCommand(platform, card, { ...options, terminalNotifier: false });
+        result = await this.show(c);
+      }
     } else if (cfg.desktop) {
       this.log("desktop skipped: Herdr is the active window");
     }

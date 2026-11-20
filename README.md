@@ -134,10 +134,17 @@ Herdr already plays a sound and shows a toast **inside its window** when an agen
 in another application, or away from the computer, create `data/tabi/notify.json` inside the Herdr config folder. It is off until
 that file exists, and `data/` is never committed. Two channels, each optional:
 
-- **Desktop** (`"desktop": true`): a notification of the system, shown only when Herdr is **not** the active window (inside it
-  there is already its own). It says who and what: `Mai terminó` over `Listo, el PR quedó publicado.`, or `Mai te necesita` over
-  what it asks. macOS uses `terminal-notifier` if you have it (`brew install terminal-notifier`), else `osascript`; Windows shows
-  a toast through `tools/desktop-notify.ps1`; Linux uses `notify-send`.
+- **Desktop** (`"desktop": true`): a notification of the system, shown only when Herdr is **not** the active window (inside it there
+  is already its own). A system banner has a fixed shape (the icon of the app, a bold title, a text) and cannot be drawn like the
+  card, so it is kept plain: **`Mai terminó · herdr-tabi`** in bold (who, what, where) and, below, the first line of what the
+  agent said. The portrait is added where the system allows it.
+  - **macOS:** with `terminal-notifier` (`brew install terminal-notifier`) the portrait shows on the right of the notification.
+    Without it, or if macOS refuses it, `osascript` is used: same text, no portrait (it cannot show one). The icon on the left is
+    always the one of the tool (a terminal, or Script Editor): macOS has no way to change it per notification. The first time, macOS asks
+    to allow notifications for the tool: if nothing ever shows, open Script Editor once, run
+    `display notification "hola" with title "tabi"` and allow it. `"notifier": "osascript"` skips `terminal-notifier` altogether.
+  - **Windows:** a toast with the portrait cropped to a circle, through `tools/desktop-notify.ps1`.
+  - **Linux:** `notify-send` with the portrait as the icon.
 - **Phone** (`"topic": "..."`): a push through [ntfy](https://ntfy.sh), to its app on your phone.
 
 Desktop only, macOS or Linux:
@@ -170,6 +177,7 @@ Subscribe to the topic in the ntfy app. All the options:
 | `server` | Your own ntfy server (`https://` only) | `https://ntfy.sh` |
 | `on` | `["blocked", "done"]`, or just one of them | both |
 | `details` | `true`: the **phone** push carries the character and the first line of what the agent said. Off, it only says the program and the status | `false` |
+| `notifier` | macOS: `"osascript"` never uses `terminal-notifier` (text only, no portrait) | `"auto"` |
 | `debug` | `true`: writes what happens (a change noticed, whether the window was active, the exit code of the command) to `data/tabi/notify.log`, the last 80 lines. For finding out why nothing shows | `false` |
 
 **Privacy.** The desktop notification never leaves your machine. With `details` on, the first line (140 characters) of the agent's
