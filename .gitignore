@@ -66,6 +66,9 @@ id_ed25519*
 # --- Copies of your own files that "tabi install" replaced ---
 /.tabi-backup-*/
 
+# --- Engram memory chunks: `engram sync` writes them into the current folder, and they hold what you told your agents ---
+/.engram/
+
 # --- Private notes: they live in a private repository, never here ---
 ECOSISTEMA.md
 

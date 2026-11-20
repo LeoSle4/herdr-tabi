@@ -48,6 +48,7 @@ edited a tracked file or are on another branch. If you installed the command wit
 | `tabi install` | Sets tabi up in the Herdr config folder. On an installed folder it behaves like `update`. |
 | `tabi update` | Pulls the latest version. |
 | `tabi shell` | Installs the terminal extras and wires your shell (see below). |
+| `tabi memory` | `push`, `pull` or `status`: shares your Engram memories between machines (see below). |
 | `tabi status` | Shows the folder, the installed version and anything missing (git, Python). |
 | `tabi version` | Prints the tool version. |
 
@@ -97,6 +98,29 @@ without touching your rc file again; a copy of the original is kept as `<rc>.tab
 It is the same setup as on Windows: the Starship prompt (a `~/.config/starship.toml` of your own wins), `z <part>`,
 Ctrl+R and Ctrl+T with fzf, and `ls`, `ll` and `cat` through eza and bat. In zsh it adds history suggestions (Right arrow
 accepts) and syntax highlighting; bash has no inline suggestions. Other shells get the two lines to add by hand.
+
+## Engram memories between machines
+
+Engram can sync through git: `engram sync` writes only the new memories, as compressed chunks, into `.engram/` of the folder
+you run it in, and `engram sync --import` reads them on another machine. Prompts are left out unless you ask for them. Do not
+copy `engram.db` itself: it is a live SQLite database. `tabi memory` wraps that flow.
+
+Once per machine, create a **private** GitHub repository (for example `engram-memory`) and clone it as `~/engram-memory`
+(or point `TABI_MEMORY_DIR` at another folder). Then:
+
+```bash
+tabi memory push     # export what is new here and send it
+tabi memory pull     # fetch what the other machines sent and import it
+tabi memory status   # Engram's own sync status
+```
+
+Memories hold everything you told your agents, so it is careful on purpose:
+
+- It refuses the public `herdr-tabi` repository, and any repository `gh repo view` does not confirm as private. Without `gh`
+  it refuses too, unless you set `TABI_MEMORY_TRUST=1`.
+- It never exports prompts. Do not add `--include-prompts` yourself. `/.engram/` is ignored in this repository, so running
+  `engram sync` inside it cannot publish anything.
+- It is not live: pull before you start working and push when you finish. Use the same Engram version on every machine.
 
 ## What an install touches
 

@@ -4,7 +4,7 @@
 # and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
 set -eu
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 REPO="${TABI_REPO:-https://github.com/LeoSle4/herdr-tabi.git}"
 BRANCH="${TABI_BRANCH:-main}"
 
@@ -147,6 +147,53 @@ refresh_self() {
   cp "$dir/bin/tabi" "$me/tabi.new" && chmod +x "$me/tabi.new" && mv "$me/tabi.new" "$me/tabi" && say "Updated the tabi command"
 }
 
+memory_dir() { printf '%s\n' "${TABI_MEMORY_DIR:-$HOME/engram-memory}"; }
+
+# Engram memories hold everything said to the agents: they may only go to a repository confirmed private.
+memory_check() {
+  mdir=$1
+  command -v engram >/dev/null 2>&1 || die "engram is not installed (gentle-ai installs it)"
+  [ -d "$mdir/.git" ] || die "$mdir is not a git checkout: clone your private memory repository there, or set TABI_MEMORY_DIR"
+  url=$(git -C "$mdir" remote get-url origin 2>/dev/null) || die "$mdir has no 'origin' remote"
+  case $url in *herdr-tabi*) die "refusing: $url is the public tabi repository; memories must go to a private one" ;; esac
+  [ "${TABI_MEMORY_TRUST:-0}" = 1 ] && return 0
+  command -v gh >/dev/null 2>&1 || die "cannot confirm the repository is private without gh: install it, or set TABI_MEMORY_TRUST=1 if you are sure"
+  [ "$(cd "$mdir" && gh repo view --json isPrivate -q .isPrivate 2>/dev/null)" = true ] ||
+    die "$url is not confirmed private (gh repo view): memories hold everything you told your agents"
+}
+
+cmd_memory() {
+  sub=$1
+  need_git
+  mdir=$(memory_dir)
+  case $sub in
+    push)
+      memory_check "$mdir"
+      git -C "$mdir" ls-remote --exit-code origin HEAD >/dev/null 2>&1 &&
+        { git -C "$mdir" pull -q --rebase || die "could not update $mdir from origin"; }
+      (cd "$mdir" && engram sync --all) || die "engram sync failed"
+      if [ -z "$(git -C "$mdir" status --porcelain -- .engram)" ]; then say "Nothing new to send"; return; fi
+      git -C "$mdir" add .engram
+      git -C "$mdir" commit -q -m "memory: $(hostname) $(date +%Y-%m-%d)" || die "could not commit in $mdir (is your git identity set?)"
+      git -C "$mdir" push -q -u origin HEAD 2>/dev/null ||
+        { git -C "$mdir" pull -q --rebase && git -C "$mdir" push -q -u origin HEAD; } || die "could not push $mdir"
+      say "Memories sent"
+      ;;
+    pull)
+      memory_check "$mdir"
+      git -C "$mdir" pull -q --ff-only || die "could not update $mdir from origin"
+      (cd "$mdir" && engram sync --import) || die "engram sync --import failed"
+      say "Memories imported"
+      ;;
+    status)
+      command -v engram >/dev/null 2>&1 || die "engram is not installed (gentle-ai installs it)"
+      [ -d "$mdir" ] || die "$mdir does not exist: clone your private memory repository there, or set TABI_MEMORY_DIR"
+      (cd "$mdir" && engram sync --status)
+      ;;
+    *) die "usage: tabi memory push | pull | status" ;;
+  esac
+}
+
 cmd_status() {
   dir=$1
   printf 'tabi %s\nfolder: %s\n' "$VERSION" "$dir"
@@ -168,6 +215,8 @@ Commands:
   update    Pull the latest version (fast-forward only; refuses if you have local edits)
   shell     Install the terminal extras (Starship, zoxide, fzf, eza, bat, zsh plugins) and wire your
             ~/.zshrc or ~/.bashrc; --no-install only wires the file
+  memory    Share Engram memories between machines through a private git repository:
+            push | pull | status (the repository is ~/engram-memory, or \$TABI_MEMORY_DIR)
   status    Show the folder, the installed version and what is missing
   version   Print the tool version
 
@@ -177,6 +226,10 @@ EOF
 
 command=${1:-help}
 [ $# -gt 0 ] && shift
+sub=""
+if [ "$command" = memory ] && [ $# -gt 0 ]; then
+  case $1 in -*) ;; *) sub=$1; shift ;; esac
+fi
 dir=$(default_dir)
 with_shell=0
 no_shell=0
@@ -194,6 +247,7 @@ done
 case $command in
   install) cmd_install "$dir"; if ask_extras; then cmd_shell "$dir"; fi ;;
   shell) cmd_shell "$dir" ;;
+  memory) cmd_memory "$sub" ;;
   update) cmd_update "$dir" ;;
   status) cmd_status "$dir" ;;
   version|--version|-v) echo "tabi $VERSION" ;;

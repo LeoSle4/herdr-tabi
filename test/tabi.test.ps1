@@ -107,6 +107,64 @@ try {
   Check 'version: prints the tool version' ($r.Out -match 'tabi \d+\.\d+\.\d+')
   $r = Run help
   Check 'help: prints usage and mentions shell' ($r.Code -eq 0 -and $r.Out -match 'shell')
+  # 9. tabi memory: two machines share Engram chunks through a git repository (engram itself is a stub here).
+  $bin = Join-Path $root 'bin'
+  New-Item -ItemType Directory -Path $bin | Out-Null
+  [IO.File]::WriteAllText((Join-Path $bin 'engram.cmd'), @'
+@echo off
+if "%2"=="--all" (
+  if not exist .engram mkdir .engram
+  for %%I in (.) do echo chunk> ".engram\chunk-%%~nxI"
+)
+if "%2"=="--import" echo imported>> "%STUB_LOG%"
+if "%2"=="--status" echo Sync status:
+'@)
+  $env:PATH = "$bin;$env:PATH"
+  $env:STUB_LOG = Join-Path $root 'stub.log'
+  $memOrigin = Join-Path $root 'mem.git'
+  G init -q --bare -b main $memOrigin
+  foreach ($m in 'm1', 'm2') {
+    $d = Join-Path $root $m
+    G clone -q $memOrigin $d 2>$null
+    G -C $d config user.name t
+    G -C $d config user.email t@t.test
+    G -C $d checkout -q -B main
+  }
+  $m1 = Join-Path $root 'm1'; $m2 = Join-Path $root 'm2'
+  $env:TABI_MEMORY_TRUST = '1'
+
+  $env:TABI_MEMORY_DIR = $m1
+  $r = Run memory push
+  Check 'memory: push sends the chunk' ($r.Code -eq 0 -and $r.Out -match 'Memories sent' -and ((& git -C $memOrigin ls-tree -r --name-only main) -contains '.engram/chunk-m1'))
+  $r = Run memory push
+  Check 'memory: push again has nothing new' ($r.Code -eq 0 -and $r.Out -match 'Nothing new')
+
+  $env:TABI_MEMORY_DIR = $m2
+  $r = Run memory pull
+  Check 'memory: pull brings it and imports' ($r.Code -eq 0 -and (Test-Path (Join-Path $m2 '.engram\chunk-m1')) -and ((Get-Content -LiteralPath $env:STUB_LOG -Raw) -match 'imported'))
+  $r = Run memory push
+  $env:TABI_MEMORY_DIR = $m1
+  $r2 = Run memory pull
+  Check 'memory: the other machine sends its own chunk' ($r.Code -eq 0 -and $r2.Code -eq 0 -and (Test-Path (Join-Path $m1 '.engram\chunk-m2')))
+  $r = Run memory status
+  Check 'memory: status passes engram through' ($r.Out -match 'Sync status')
+  $r = Run memory nonsense
+  Check 'memory: unknown subcommand fails' ($r.Code -ne 0)
+
+  $pubOrigin = Join-Path $root 'herdr-tabi.git'
+  G init -q --bare -b main $pubOrigin
+  $pub = Join-Path $root 'pub'
+  G clone -q $pubOrigin $pub 2>$null
+  $env:TABI_MEMORY_DIR = $pub
+  $r = Run memory push
+  Check 'memory: refuses the public tabi repository' ($r.Code -ne 0 -and $r.Out -match 'public tabi repository')
+  $env:TABI_MEMORY_DIR = $empty
+  $r = Run memory push
+  Check 'memory: refuses a folder that is not a checkout' ($r.Code -ne 0)
+  $env:TABI_MEMORY_DIR = $m1
+  $env:TABI_MEMORY_TRUST = $null
+  $r = Run memory push
+  Check 'memory: refuses when privacy cannot be confirmed' ($r.Code -ne 0)
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -114,3 +172,6 @@ finally {
 
 if ($script:fails -ne 0) { Write-Host "`n$($script:fails) test(s) failed"; exit 1 }
 Write-Host "`nall passed"
+# Some tests run tabi to prove that it fails, and the last one leaves $LASTEXITCODE at 1. GitHub's pwsh steps end with
+# `exit $LASTEXITCODE`, so a green run would be reported as a failure: leave a clean code.
+exit 0
