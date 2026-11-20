@@ -5,6 +5,8 @@
 const EVENTS = ["blocked", "done"];
 const NAMES = { "claude-code": "Claude Code", codex: "Codex", pi: "Pi", opencode: "OpenCode", gemini: "Gemini" };
 const VERB = { blocked: "te necesita", done: "terminó" };
+const KANJI = { blocked: "待", done: "済" };
+const LABEL = { blocked: "te espera", done: "terminó" };
 
 /** How far from the moment of the change a recorded text may be to still be about it (the hook and Herdr are not ordered). */
 export const FRESH_MS = 30000;
@@ -18,6 +20,7 @@ export const WAIT_TRIES = 8;
  *     "server": "https://ntfy.sh",           your own ntfy server (https only)
  *     "on": ["blocked", "done"],
  *     "details": false,                      true: the push carries the character and the first line of what it said
+ *     "notifier": "auto",                    "osascript": never use terminal-notifier on macOS (text only, no portrait)
  *     "debug": false }                       true: writes what happens to data/tabi/notify.log (to find out why nothing shows)
  * Returns null (everything off) when the file is not JSON, has neither `desktop` nor a good topic, or the topic is too
  * guessable or the server is not https: a typo must never send the messages somewhere else.
@@ -39,7 +42,7 @@ export function parseConfig(text) {
   }
   if (!topic && !desktop) return null;
   const on = Array.isArray(c.on) ? c.on.filter((e) => EVENTS.includes(e)) : EVENTS;
-  return { server, topic, desktop, on, details: c.details === true, debug: c.debug === true };
+  return { server, topic, desktop, on, details: c.details === true, notifier: c.notifier === "osascript" ? "osascript" : "auto", debug: c.debug === true };
 }
 
 /** Address -> status, for the agents of one reading. */
@@ -96,16 +99,40 @@ export function pushPayload(cfg, agent, name, said) {
   return { topic: cfg.topic, title: "Herdr: terminó", message: `${who} terminó`, priority };
 }
 
-/** The program that shows a system notification, and its arguments, for each platform. Text goes as arguments, never in a shell line. */
-export function desktopCommand(platform, title, body, options = {}) {
+/**
+ * The notification of the system. A banner has a fixed shape (the icon of the app, then a bold title, a bold subtitle and a
+ * plain text) and two bold lines compete, so it is kept to one: "Kazuto terminó · herdr-tabi" and, below, what the agent said.
+ * `image` is the portrait (an absolute path) or null.
+ */
+export function cardMessage(agent, name, said, image = null) {
+  const space = agent.space_name || "sin space";
+  return { title: `${name} ${VERB[agent.status] ?? ""} · ${space}`, subtitle: "", body: said || "", image };
+}
+
+/** The absolute path of an agent's portrait thumbnail (tabi-party publishes it relative to the app home), or null. */
+export function portraitOf(party, address, appHome) {
+  const thumb = party?.[address]?.thumb;
+  return thumb ? `${appHome}/${thumb}` : null;
+}
+
+/**
+ * The program that shows a system notification, and its arguments, for each platform. Text goes as arguments, never in a
+ * shell line. macOS: terminal-notifier shows the portrait; osascript (always there) shows only text. An empty subtitle is
+ * left out, so no blank line is drawn.
+ */
+export function desktopCommand(platform, card, options = {}) {
+  const { title, subtitle, body, image } = card;
   if (platform === "macos") {
-    if (options.terminalNotifier) return { command: "terminal-notifier", args: ["-title", title, "-message", body || " ", "-group", "tabi"] };
-    return { command: "osascript", args: ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, body] };
+    if (options.terminalNotifier) {
+      return { command: "terminal-notifier", args: ["-title", title, ...(subtitle ? ["-subtitle", subtitle] : []), "-message", body || " ", "-group", "tabi", ...(image ? ["-contentImage", image] : [])] };
+    }
+    const show = `display notification (item 2 of argv) with title (item 1 of argv)${subtitle ? " subtitle (item 3 of argv)" : ""}`;
+    return { command: "osascript", args: ["-e", "on run argv", "-e", show, "-e", "end run", title, body || " ", ...(subtitle ? [subtitle] : [])] };
   }
   if (platform === "windows") {
-    return { command: "powershell", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", options.script, "-Title", title, "-Body", body] };
+    return { command: "powershell", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", options.script, "-Title", title, ...(subtitle ? ["-Subtitle", subtitle] : []), "-Body", body, ...(image ? ["-Image", image] : [])] };
   }
-  return { command: "notify-send", args: ["--app-name=Herdr", "--", title, body] };
+  return { command: "notify-send", args: ["--app-name=Herdr", ...(image ? ["-i", image] : []), "--", title, [subtitle, body].filter(Boolean).join("\n")] };
 }
 
 /** The last `keep` lines of a log with `line` added, each stamped with the time. Newest last. */
