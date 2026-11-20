@@ -128,38 +128,61 @@ Only the files this repository tracks. Your data, caches and anything the `.giti
 tracked file already exists and differs (your own `settings.json`, for example), the old copy is saved in
 `.tabi-backup-<date>/` before it is replaced.
 
-## Phone notifications
+## Notifications outside Herdr
 
-Herdr already plays a sound and shows a toast when an agent needs you or finishes. To also get a push on your phone
-(or any device with the [ntfy](https://ntfy.sh) app), create `data/tabi/notify.json` inside the Herdr config folder.
-It is off until that file exists, and `data/` is never committed.
+Herdr already plays a sound and shows a toast **inside its window** when an agent needs you or finishes. To be told when you are
+in another application, or away from the computer, create `data/tabi/notify.json` inside the Herdr config folder. It is off until
+that file exists, and `data/` is never committed. Two channels, each optional:
 
-macOS and Linux:
+- **Desktop** (`"desktop": true`): a notification of the system, shown only when Herdr is **not** the active window (inside it
+  there is already its own). It says who and what: `Mai terminó` over `Listo, el PR quedó publicado.`, or `Mai te necesita` over
+  what it asks. macOS uses `terminal-notifier` if you have it (`brew install terminal-notifier`), else `osascript`; Windows shows
+  a toast through `tools/desktop-notify.ps1`; Linux uses `notify-send`.
+- **Phone** (`"topic": "..."`): a push through [ntfy](https://ntfy.sh), to its app on your phone.
+
+Desktop only, macOS or Linux:
 
 ```bash
 mkdir -p ~/.config/herdr-app/data/tabi
-printf '{"topic":"tabi-%s"}\n' "$(openssl rand -hex 8)" > ~/.config/herdr-app/data/tabi/notify.json
+printf '{"desktop":true}\n' > ~/.config/herdr-app/data/tabi/notify.json
 ```
 
-Windows (PowerShell):
+Desktop and phone, with a random topic:
+
+```bash
+mkdir -p ~/.config/herdr-app/data/tabi
+printf '{"desktop":true,"topic":"tabi-%s","details":true}\n' "$(openssl rand -hex 8)" > ~/.config/herdr-app/data/tabi/notify.json
+```
+
+On Windows (PowerShell):
 
 ```powershell
 New-Item -ItemType Directory -Force "$HOME\.config\herdr-app\data\tabi" | Out-Null
-Set-Content "$HOME\.config\herdr-app\data\tabi\notify.json" ('{"topic":"tabi-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '"}')
+Set-Content "$HOME\.config\herdr-app\data\tabi\notify.json" ('{"desktop":true,"topic":"tabi-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '","details":true}')
 ```
 
-Then subscribe to that topic in the ntfy app. All the options:
+Subscribe to the topic in the ntfy app. All the options:
 
 | Key | Meaning | Default |
 |---|---|---|
-| `topic` | Required: 8 to 64 letters, digits, `_` or `-`. On the public server the topic is the only secret, so keep it random | none (off) |
+| `desktop` | `true`: a system notification when Herdr is not the active window | off |
+| `topic` | The phone push: 8 to 64 letters, digits, `_` or `-`. On the public server the topic is the only secret, so keep it random | none (no push) |
 | `server` | Your own ntfy server (`https://` only) | `https://ntfy.sh` |
 | `on` | `["blocked", "done"]`, or just one of them | both |
-| `details` | `true` adds the space name to the message. Off by default because the server belongs to someone else | `false` |
+| `details` | `true`: the **phone** push carries the character and the first line of what the agent said. Off, it only says the program and the status | `false` |
 
-Enable it on **one** machine only: every Herdr app sees every machine's agents, so two machines would send the same
-alert twice. Messages go through `curl`, which Windows includes. If the file is invalid or the server is not `https`,
-nothing is sent.
+**Privacy.** The desktop notification never leaves your machine. With `details` on, the first line (140 characters) of the agent's
+last answer is sent to the ntfy server, which on ntfy.sh belongs to somebody else: use your own server, or leave `details` off
+(the push then says only "Claude Code terminó"). An invalid file, a topic that is too short or a `server` that is not `https` turn
+everything off instead of sending anywhere.
+
+**What the text is.** It comes from the Claude Code hook (`docs/subagents/README.md`, five events installed), so it needs
+`python3 tools/tabi_subagents.py install`, and it is available for agents that run **on the machine that sends the notification**.
+For an agent of another machine, or for Codex, the notification says the character and the space but not what it said. A change
+waits up to 8 seconds for its text and goes without it after that.
+
+Enable the **phone** on one machine only: every Herdr app sees every machine's agents, so two machines would send the same
+alert twice. Messages go through `curl`, which Windows includes. To change the sounds themselves, see below.
 
 ## Alert sounds
 
