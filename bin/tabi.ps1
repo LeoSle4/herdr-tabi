@@ -3,13 +3,14 @@
 # and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
 param(
   [Parameter(Position = 0)][string]$Command = 'help',
+  [Parameter(Position = 1)][string]$Sub,
   [string]$Dir,
   [switch]$WithShell,
   [switch]$NoShell
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '0.2.0'
+$Version = '0.3.0'
 $Repo = if ($env:TABI_REPO) { $env:TABI_REPO } else { 'https://github.com/LeoSle4/herdr-tabi.git' }
 $Branch = if ($env:TABI_BRANCH) { $env:TABI_BRANCH } else { 'main' }
 
@@ -170,6 +171,66 @@ function Install-Shell {
   Say 'Open a new terminal. Herdr already uses JetBrains Mono; in other terminals pick "JetBrainsMono Nerd Font" for the branch symbol.'
 }
 
+function Get-MemoryDir {
+  if ($env:TABI_MEMORY_DIR) { return $env:TABI_MEMORY_DIR }
+  Join-Path $HOME 'engram-memory'
+}
+
+# Engram memories hold everything said to the agents: they may only go to a repository confirmed private.
+function Test-Memory($dir) {
+  $ErrorActionPreference = 'Continue' # Windows PowerShell 5.1 turns native stderr into errors under 'Stop'
+  if (-not (Get-Command engram -ErrorAction SilentlyContinue)) { Fail 'engram is not installed (gentle-ai installs it).' }
+  if (-not (Test-Path -LiteralPath (Join-Path $dir '.git'))) { Fail "$dir is not a git checkout: clone your private memory repository there, or set TABI_MEMORY_DIR." }
+  $url = & git -C $dir remote get-url origin 2>$null
+  if ($LASTEXITCODE -ne 0 -or -not $url) { Fail "$dir has no 'origin' remote." }
+  if ($url -match 'herdr-tabi') { Fail "refusing: $url is the public tabi repository; memories must go to a private one." }
+  if ($env:TABI_MEMORY_TRUST -eq '1') { return }
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { Fail 'cannot confirm the repository is private without gh: install it, or set TABI_MEMORY_TRUST=1 if you are sure.' }
+  Push-Location $dir
+  try { $private = & gh repo view --json isPrivate -q .isPrivate 2>$null } finally { Pop-Location }
+  if ($private -ne 'true') { Fail "$url is not confirmed private (gh repo view): memories hold everything you told your agents." }
+}
+
+function Invoke-Memory([string]$sub) {
+  $ErrorActionPreference = 'Continue' # see Test-Memory
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'git is required: install it (winget install Git.Git) and run this again.' }
+  $dir = Get-MemoryDir
+  $script:Target = $dir
+  switch ($sub) {
+    'push' {
+      Test-Memory $dir
+      & git -C $dir ls-remote --exit-code origin HEAD *> $null
+      if ($LASTEXITCODE -eq 0) {
+        try { Invoke-Git pull -q --rebase | Out-Null } catch { Fail "could not update $dir from origin." }
+      }
+      Push-Location $dir
+      try { & engram sync --all; if ($LASTEXITCODE -ne 0) { Fail 'engram sync failed.' } } finally { Pop-Location }
+      if (-not (Invoke-Git status --porcelain -- .engram)) { Say 'Nothing new to send'; return }
+      Invoke-Git add .engram | Out-Null
+      try { Invoke-Git commit -q -m "memory: $env:COMPUTERNAME $(Get-Date -Format yyyy-MM-dd)" | Out-Null } catch { Fail "could not commit in $dir (is your git identity set?)." }
+      try { Invoke-Git push -q -u origin HEAD | Out-Null }
+      catch {
+        try { Invoke-Git pull -q --rebase | Out-Null; Invoke-Git push -q -u origin HEAD | Out-Null } catch { Fail "could not push $dir." }
+      }
+      Say 'Memories sent'
+    }
+    'pull' {
+      Test-Memory $dir
+      try { Invoke-Git pull -q --ff-only | Out-Null } catch { Fail "could not update $dir from origin." }
+      Push-Location $dir
+      try { & engram sync --import; if ($LASTEXITCODE -ne 0) { Fail 'engram sync --import failed.' } } finally { Pop-Location }
+      Say 'Memories imported'
+    }
+    'status' {
+      if (-not (Get-Command engram -ErrorAction SilentlyContinue)) { Fail 'engram is not installed (gentle-ai installs it).' }
+      if (-not (Test-Path -LiteralPath $dir)) { Fail "$dir does not exist: clone your private memory repository there, or set TABI_MEMORY_DIR." }
+      Push-Location $dir
+      try { & engram sync --status } finally { Pop-Location }
+    }
+    default { Fail 'usage: tabi memory push | pull | status' }
+  }
+}
+
 function Show-Usage {
   @"
 tabi ${Version}: install and update the tabi layout for Herdr
@@ -182,6 +243,8 @@ Commands:
   update    Pull the latest version (fast-forward only; refuses if you have local edits)
   status    Show the folder, the installed version and what is missing
   shell     Install the terminal extras (Starship, zoxide, fzf, eza, bat, Nerd Font) and wire your PowerShell profiles
+  memory    Share Engram memories between machines through a private git repository:
+            push | pull | status (the repository is ~\engram-memory, or $env:TABI_MEMORY_DIR)
   version   Print the tool version
 
 The folder defaults to `$env:HERDR_APP_HOME, else the first of ~\.config\herdr-app, %APPDATA%\herdr-app
@@ -194,6 +257,7 @@ switch ($Command) {
   'update'  { $script:Target = Find-Folder; Update-Tabi }
   'status'  { $script:Target = Find-Folder; Show-Status }
   'shell'   { $script:Target = Find-Folder; Install-Shell }
+  'memory'  { Invoke-Memory $Sub }
   { $_ -in 'version', '--version', '-v' } { Write-Host "tabi $Version" }
   { $_ -in 'help', '--help', '-h' } { Show-Usage }
   default { Show-Usage; exit 1 }

@@ -95,5 +95,38 @@ check "profile: valid bash" 'bash -n "$A/shell/profile.sh"'
 check "profile: valid zsh" '! command -v zsh >/dev/null || zsh -n "$A/shell/profile.sh"'
 check "profile: loads with no tools on the PATH" 'PATH=/usr/bin:/bin TABI_SHELL_DIR="$A/shell" bash --norc -ic ". \"$A/shell/profile.sh\"; echo loaded" 2>/dev/null | grep -q loaded'
 
+# 11. tabi memory: two machines share Engram chunks through a git repository (engram itself is a stub here).
+MB="$ROOT/bin"
+mkdir -p "$MB"
+cat > "$MB/engram" <<'STUB'
+#!/bin/sh
+case "$2" in
+  --all) mkdir -p .engram; echo chunk > ".engram/chunk-$(basename "$PWD")" ;;
+  --import) echo imported >> "$STUB_LOG" ;;
+  --status) echo "Sync status:" ;;
+esac
+STUB
+chmod +x "$MB/engram"
+export STUB_LOG="$ROOT/stub.log"
+git init -q --bare -b main "$ROOT/mem.git"
+for m in m1 m2; do
+  git clone -q "$ROOT/mem.git" "$ROOT/$m" 2>/dev/null
+  git -C "$ROOT/$m" config user.name t
+  git -C "$ROOT/$m" config user.email t@t.test
+  git -C "$ROOT/$m" checkout -q -B main
+done
+mem() { d=$1; shift; PATH="$MB:$PATH" TABI_MEMORY_DIR="$d" TABI_MEMORY_TRUST=1 sh "$TABI" memory "$@"; }
+check "memory: push sends the chunk" 'mem "$ROOT/m1" push | grep -q "Memories sent" && git -C "$ROOT/mem.git" ls-tree -r --name-only main | grep -qx ".engram/chunk-m1"'
+check "memory: push again has nothing new" 'mem "$ROOT/m1" push | grep -q "Nothing new"'
+check "memory: pull brings it and imports" 'mem "$ROOT/m2" pull | grep -q "Memories imported" && [ -f "$ROOT/m2/.engram/chunk-m1" ] && grep -q imported "$STUB_LOG"'
+check "memory: the other machine sends its own chunk" 'mem "$ROOT/m2" push | grep -q "Memories sent" && mem "$ROOT/m1" pull >/dev/null && [ -f "$ROOT/m1/.engram/chunk-m2" ]'
+check "memory: status passes engram through" 'mem "$ROOT/m1" status | grep -q "Sync status"'
+check "memory: unknown subcommand fails" '! mem "$ROOT/m1" nonsense >/dev/null 2>&1'
+git init -q --bare -b main "$ROOT/herdr-tabi.git"
+git clone -q "$ROOT/herdr-tabi.git" "$ROOT/pub" 2>/dev/null
+check "memory: refuses the public tabi repository" '! mem "$ROOT/pub" push >/dev/null 2>&1 && mem "$ROOT/pub" push 2>&1 | grep -q "public tabi repository"'
+check "memory: refuses a folder that is not a checkout" '! mem "$ROOT/empty" push >/dev/null 2>&1'
+check "memory: refuses when privacy cannot be confirmed" '! PATH="$MB:$PATH" TABI_MEMORY_DIR="$ROOT/m1" sh "$TABI" memory push >/dev/null 2>&1'
+
 if [ "$FAILS" -ne 0 ]; then printf '\n%s test(s) failed\n' "$FAILS"; exit 1; fi
 printf '\nall passed\n'
