@@ -190,3 +190,8 @@ on macOS, Linux and Windows (PowerShell 7 and Windows PowerShell 5.1) for every 
 ## A second Claude Code account on Windows
 
 See [docs/claude2-windows](docs/claude2-windows/README.md).
+
+## Restarting the Windows host without signing in
+
+See [docs/windows-host](docs/windows-host/README.md): a test for what happens after a restart, and a fallback that starts
+`herdr-core` at boot.
