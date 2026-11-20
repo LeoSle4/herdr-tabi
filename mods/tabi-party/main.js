@@ -1,5 +1,5 @@
 // tabi-party: "使者 · agentes". One card per agent: accent strip by state (cream working, amber waiting, gray idle),
-// round portrait, account name (claude, claude2, codex), status kanji, "space · task" and a 2 px bar. The right edge is cut on a diagonal with two SVG
+// round portrait, the portrait's character name (Mai, Kazuto...; the account, claude/claude2/codex, without a portrait and in the tooltip), status kanji, "space · task" and a 2 px bar. The right edge is cut on a diagonal with two SVG
 // shapes (the engine has no clip-path): a triangle in the sidebar's color and a hairline on its edge.
 // Portraits: every png/jpg in ~/Documents/retratos/ (any name; also files without extension whose content is a png or jpeg;
 // anything else is named in a notification and ignored). Each agent gets one at random when it appears, by the unique id of
@@ -9,8 +9,8 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, home, run, theme, checking, layout, appHome, exec, shared, notify, window as herdrWindow } from "herdr";
-import { statusInfo, accountNames, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { agents, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
+import { statusInfo, accountNames, cardName, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -185,7 +185,20 @@ export default class TabiParty extends View {
     run("layout.resize", { id: "party", px });
   }
 
-  card(a, t, name) {
+  /** Publishes who each agent is (character, account, thumbnail) for tabi-toast, only when something changed. */
+  publish(list, names, cx) {
+    const out = {};
+    for (const a of list) {
+      const file = this.assign[this.idOf(a)];
+      out[a.address] = { name: cardName(file, names[a.address]), account: names[a.address], thumb: this.thumbs.get(file)?.path ?? null };
+    }
+    const key = JSON.stringify(out);
+    if (key === this.published) return;
+    this.published = key;
+    cx.spawn(async () => { setShared("tabi.party", out); });
+  }
+
+  card(a, t, name, account) {
     const s = statusInfo(a.status);
     const accent = t[s.accent];
     const thumb = this.thumbs.get(this.assign[this.idOf(a)])?.path;
@@ -208,7 +221,8 @@ export default class TabiParty extends View {
         .child(portrait)
         .child(v_flex().w(TEXT_W).gap(3)
           .child(h_flex().justify_between().items_baseline()
-            .child(div().truncate().text_size(12.5).text_color(a.focused ? t.foreground : t.muted).child(name))
+            .child(div().id(`name-${a.address}`).truncate().text_size(12.5).text_color(a.focused ? t.foreground : t.muted)
+              .when(name !== account, (el) => el.tooltip(`${name} · ${account}`)).child(name))
             .child(div().text_size(13).text_color(accent).child(s.kanji)))
           .child(div().truncate().text_size(11).font_light().text_color(t.dim).child(subtitle(a)))
           .child(track)))
@@ -223,7 +237,8 @@ export default class TabiParty extends View {
     const detected = Object.fromEntries(Object.entries(this.detected).map(([k, v]) => [k, v.name]));
     const names = accountNames(list, detected);
     const body = v_flex().gap(8).px(12).pb(12);
-    for (const a of list) body.child(this.card(a, t, names[a.address]));
+    this.publish(list, names, cx);
+    for (const a of list) body.child(this.card(a, t, cardName(this.assign[this.idOf(a)], names[a.address]), names[a.address]));
     if (!list.length) body.child(div().py(8).text_size(11.5).font_light().text_color(t.dim).child("Ningún agente activo."));
     return v_flex().id("tabi-party").size_full().bg(t.chrome).overflow_hidden()
       .child(div().id("tabi-party-list").flex_1().min_h(0).overflow_y_scrollbar()

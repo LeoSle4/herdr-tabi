@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statusInfo, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
+import { statusInfo, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
 
 test("status: working 働 cream, blocked 待 amber, idle and done 済 gray", () => {
   assert.deepEqual([statusInfo("working").kanji, statusInfo("working").accent], ["働", "solid"]);
@@ -122,4 +122,21 @@ test("reconcile: a closed agent frees its portrait; a vanished image is replaced
   assert.equal(again.p4, "1"); // the freed one is available again
   assert.equal(reconcilePortraits(["1"], ["p1"], { p1: "gone" }, () => 0).p1, "1");
   assert.deepEqual(reconcilePortraits([], ["p1"], { p1: "1" }), {});
+});
+
+test("character: the portrait's file name without the image extension", () => {
+  assert.equal(characterName("Mai.jpg"), "Mai");
+  assert.equal(characterName("Shikimori.JPEG"), "Shikimori");
+  assert.equal(characterName("Kazuto.png"), "Kazuto");
+  assert.equal(characterName("Rusita"), "Rusita"); // a file without extension keeps its name
+  assert.equal(characterName("Mai Sakurajima.jpg"), "Mai Sakurajima");
+  assert.equal(characterName("foto.final.jpg"), "foto.final"); // only the last extension goes
+  assert.equal(characterName(".jpg"), null);
+  assert.equal(characterName(undefined), null);
+});
+
+test("card name: the character with a portrait, the account without one", () => {
+  assert.equal(cardName("Mai.jpg", "claude"), "Mai");
+  assert.equal(cardName(undefined, "claude2"), "claude2");
+  assert.equal(cardName("", "codex"), "codex");
 });
