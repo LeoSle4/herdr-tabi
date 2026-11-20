@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: macOS and Linux
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Scripts parse
+        run: |
+          sh -n bin/tabi
+          sh -n install.sh
+          bash -n shell/profile.sh
+          ruby -c Formula/tabi.rb
+      - name: settings.json is valid and the sounds it names exist
+        run: |
+          python3 - <<'PY'
+          import json, os
+          s = json.load(open("settings.json"))
+          for k in ("blocked", "done"):
+              f = s.get("sounds", {}).get(k)
+              assert f is None or os.path.isfile(f), f"settings.json points to a missing sound: {f}"
+          print("ok")
+          PY
+      - name: tabi command and shell setup
+        run: sh test/tabi.test.sh
+      - name: Mod tests (JavaScript)
+        run: |
+          for f in mods/*/*.test.mjs; do
+            echo "== $f"
+            node --test "$f" || exit 1
+          done
+      - name: Mod tests (Python)
+        working-directory: mods/tabi-sessions
+        run: python3 -X utf8 -m unittest test_sessions.py
+
+  windows:
+    name: Windows (${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Parse every script and run the tabi command
+        run: ./test/tabi.test.ps1
+      - name: Mod tests (JavaScript, including the Windows-only ones)
+        if: matrix.shell == 'pwsh'
+        run: |
+          foreach ($f in Get-ChildItem mods -Recurse -Filter *.test.mjs) {
+            Write-Host "== $($f.FullName)"
+            node --test $f.FullName
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }

@@ -3,7 +3,9 @@
 // ("fondo 4/10", click for another picture for this space) and the command palette key.
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { agents, spaces, focused, theme, shared, machines, run } from "herdr";
+import * as fs from "fs/promises";
+import { agents, spaces, focused, theme, shared, machines, run, exec, appHome } from "herdr";
+import { parseConfig, snapshot, changes, message, endpoint } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -11,6 +13,36 @@ const TIP = 10;
 export default class TabiStatus extends View {
   init(_props, cx) {
     cx.timer.every(30000, (cx) => cx.notify()); // the minutes until the next background change
+    cx.timer.every(5000, () => this.push()); // phone notifications; off until data/tabi/notify.json exists
+  }
+
+  /**
+   * Sends a push (ntfy) when an agent turns blocked or done. Opt-in through <app home>/data/tabi/notify.json (see the
+   * README); enable it on one machine only, because every Herdr app sees every machine's agents. Failures stay silent.
+   */
+  async push() {
+    if (this.pushing) return;
+    this.pushing = true;
+    try {
+      if (!this.pushConfigAt || Date.now() - this.pushConfigAt > 60000) {
+        this.pushConfigAt = Date.now();
+        try { this.pushConfig = parseConfig(await fs.readFile(`${appHome()}/data/tabi/notify.json`, "utf8")); } catch { this.pushConfig = null; }
+      }
+      const list = agents();
+      const cfg = this.pushConfig;
+      // The previous reading is kept even while the feature is off, so turning it on never floods old statuses.
+      const events = cfg ? changes(this.pushSeen ?? null, list, cfg.on) : [];
+      this.pushSeen = snapshot(list);
+      for (const a of events) {
+        const m = message(a, cfg.details);
+        await exec("curl", ["-fsS", "-m", "10", "-H", `Title: ${m.title}`, "-H", `Priority: ${m.priority}`, "-d", m.body, endpoint(cfg)], { timeout: 15000 })
+          .catch(() => {});
+      }
+    } catch {
+      // A failed reading or send is retried on the next tick.
+    } finally {
+      this.pushing = false;
+    }
   }
 
   /** One arrow: a filled body with a 0.5 px top and bottom border, then the point (fill + edge line). */

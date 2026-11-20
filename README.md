@@ -1,6 +1,6 @@
 # herdr-tabi
 
-The "tabi" layout and mods for [Herdr](https://github.com/ogulcancelik/herdr): sessions panel, usage meters,
+The "tabi" layout and mods for [Herdr](https://github.com/herdrdev/herdr): sessions panel, usage meters,
 spaces menu, backdrops and more. This repository is Herdr's config folder, so installing it is a clone into that
 folder and updating it is a fast-forward pull. The `tabi` command does both.
 
@@ -104,13 +104,88 @@ Only the files this repository tracks. Your data, caches and anything the `.giti
 tracked file already exists and differs (your own `settings.json`, for example), the old copy is saved in
 `.tabi-backup-<date>/` before it is replaced.
 
+## Phone notifications
+
+Herdr already plays a sound and shows a toast when an agent needs you or finishes. To also get a push on your phone
+(or any device with the [ntfy](https://ntfy.sh) app), create `data/tabi/notify.json` inside the Herdr config folder.
+It is off until that file exists, and `data/` is never committed.
+
+macOS and Linux:
+
+```bash
+mkdir -p ~/.config/herdr-app/data/tabi
+printf '{"topic":"tabi-%s"}\n' "$(openssl rand -hex 8)" > ~/.config/herdr-app/data/tabi/notify.json
+```
+
+Windows (PowerShell):
+
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.config\herdr-app\data\tabi" | Out-Null
+Set-Content "$HOME\.config\herdr-app\data\tabi\notify.json" ('{"topic":"tabi-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '"}')
+```
+
+Then subscribe to that topic in the ntfy app. All the options:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `topic` | Required: 8 to 64 letters, digits, `_` or `-`. On the public server the topic is the only secret, so keep it random | none (off) |
+| `server` | Your own ntfy server (`https://` only) | `https://ntfy.sh` |
+| `on` | `["blocked", "done"]`, or just one of them | both |
+| `details` | `true` adds the space name to the message. Off by default because the server belongs to someone else | `false` |
+
+Enable it on **one** machine only: every Herdr app sees every machine's agents, so two machines would send the same
+alert twice. Messages go through `curl`, which Windows includes. If the file is invalid or the server is not `https`,
+nothing is sent.
+
+## Alert sounds
+
+Herdr plays a sound when an agent needs you (`blocked`) or finishes (`done`). This repository ships two of its own in
+`sounds/`, and `settings.json` already points to them:
+
+- `blocked.mp3`: a temple bell, one strike, 1.9 s.
+- `done.mp3`: a softer wind chime, two taps, 1.3 s.
+
+They are synthesized by `tools/make-sounds.py`, so they carry no third-party material (see `sounds/CREDITS.md`). To change
+their pitch, length or decay, edit the numbers in that script and run it again (the command is in its header).
+Hear them with `afplay sounds/blocked.mp3` on macOS.
+
+To use other files, set them in `settings.json` (an absolute path, or one relative to the Herdr config folder; it applies
+live):
+
+```json
+"sounds": { "enabled": true, "blocked": "sounds/blocked.mp3", "done": "sounds/done.mp3" }
+```
+
+Herdr's own sounds are MP3, so use MP3 to be safe (other formats were not checked). Keep them short, under two seconds,
+and make the two clearly different: a sharper one for `blocked`, a softer one for `done`. Files in `sounds/` reach your
+other machines with `tabi update`.
+
+**Licences matter once the files go in a public repository.** Commit only sounds that are CC0 (public domain) or that you
+made yourself, and list each one's source in `sounds/CREDITS.md`. Where to look:
+
+| Source | Licence | Notes |
+|---|---|---|
+| [Freesound](https://freesound.org/browse/tags/japanese) | Per sound: filter by **CC0** | Temple bells (keisu, bonshō), shrine bells with a coin offering, single ceremonial strikes. Check the licence on each sound's page |
+| [OpenGameArt](https://opengameart.org) | Per item: filter by **CC0** | Game audio; bell and instrument packs, including koto music |
+| [Kenney](https://kenney.nl/assets?q=audio) | CC0 for every pack | Clean UI and interface sounds, but not Japanese in style |
+| Your own recording or synthesis | Yours | The safest option |
+
+Avoid for committed files: **Pixabay** (its licence forbids distributing a file on a standalone basis, which a public
+repository probably counts as), and anything that asks for attribution you will not give.
+
+Search terms that fit the tabi look: 鐘 *kane* or *bonshō* (temple bell), 鈴 *suzu* (shrine bell), 風鈴 *furin* (wind
+chime), 尺八 *shakuhachi*, 琴 *koto*, 鹿威し *shishi-odoshi* (bamboo fountain), 拍子木 *hyōshigi* (wooden clappers),
+木魚 *mokugyo*. A short bell for `blocked` and a soft chime for `done` is a good place to start.
+
 ## Tests
 
 ```bash
 sh test/tabi.test.sh
 ```
 
-They run the macOS and Linux command against a throwaway local repository.
+They run the macOS and Linux command against a throwaway local repository. On Windows, `test/tabi.test.ps1` does the
+same for `bin/tabi.ps1` and checks that every PowerShell script parses. GitHub Actions runs both, plus the mod tests,
+on macOS, Linux and Windows (PowerShell 7 and Windows PowerShell 5.1) for every pull request.
 
 ## A second Claude Code account on Windows
 
