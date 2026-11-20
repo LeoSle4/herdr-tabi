@@ -63,5 +63,11 @@ id_rsa*
 id_ed25519*
 .netrc
 
+# --- Copies of your own files that "tabi install" replaced ---
+/.tabi-backup-*/
+
+# --- Private notes: they live in a private repository, never here ---
+ECOSISTEMA.md
+
 # --- Local publishing scripts ---
 /.pr/

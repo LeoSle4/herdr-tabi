@@ -1,0 +1,118 @@
+#!/bin/sh
+# tabi: install and update the tabi layout for Herdr (macOS and Linux).
+# The Herdr config folder is a git checkout of this repository, so installing is a clone into it
+# and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
+set -eu
+
+VERSION="0.1.0"
+REPO="${TABI_REPO:-https://github.com/LeoSle4/herdr-tabi.git}"
+BRANCH="${TABI_BRANCH:-main}"
+
+say() { printf '==> %s\n' "$*"; }
+die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+need_git() { command -v git >/dev/null 2>&1 || die "git is required: install it and run this again"; }
+
+default_dir() {
+  if [ -n "${HERDR_APP_HOME:-}" ]; then printf '%s\n' "$HERDR_APP_HOME"; return; fi
+  printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/herdr-app"
+}
+
+restart_notice() { say "Restart Herdr to load the new version."; }
+
+cmd_install() {
+  dir=$1
+  need_git
+  if [ -d "$dir/.git" ]; then
+    say "$dir is already a checkout: updating it"
+    cmd_update "$dir"
+    return
+  fi
+  say "Installing tabi into $dir"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" remote add origin "$REPO"
+  git -C "$dir" fetch -q origin "$BRANCH" || die "could not fetch $REPO ($BRANCH)"
+
+  # Keep a copy of every file the checkout is about to replace, so nothing of yours is lost.
+  backup="$dir/.tabi-backup-$(date +%Y%m%d-%H%M%S)"
+  git -C "$dir" ls-tree -r --name-only "origin/$BRANCH" | while IFS= read -r f; do
+    [ -f "$dir/$f" ] || continue
+    mine=$(git -C "$dir" hash-object "$dir/$f")
+    theirs=$(git -C "$dir" rev-parse "origin/$BRANCH:$f")
+    [ "$mine" = "$theirs" ] && continue
+    mkdir -p "$backup/$(dirname "$f")"
+    cp -p "$dir/$f" "$backup/$f"
+  done
+  [ -d "$backup" ] && say "Your previous versions were saved in $backup"
+
+  git -C "$dir" checkout -q -f -B "$BRANCH" "origin/$BRANCH"
+  git -C "$dir" branch -q --set-upstream-to="origin/$BRANCH" "$BRANCH"
+  say "Installed $(git -C "$dir" rev-parse --short HEAD)"
+  restart_notice
+}
+
+cmd_update() {
+  dir=$1
+  need_git
+  [ -d "$dir/.git" ] || die "$dir is not a tabi checkout: run 'tabi install' first"
+  current=$(git -C "$dir" symbolic-ref --short -q HEAD || true)
+  [ "$current" = "$BRANCH" ] || die "$dir is on '${current:-a detached HEAD}', not '$BRANCH': switch to $BRANCH first"
+  if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
+    die "you have local changes in $dir: commit or discard them, then run this again"
+  fi
+  before=$(git -C "$dir" rev-parse HEAD)
+  git -C "$dir" fetch -q origin "$BRANCH" || die "could not fetch $REPO ($BRANCH)"
+  git -C "$dir" merge -q --ff-only "origin/$BRANCH" || die "your $BRANCH diverged from origin/$BRANCH: resolve it by hand"
+  after=$(git -C "$dir" rev-parse HEAD)
+  if [ "$before" = "$after" ]; then
+    say "Already up to date ($(git -C "$dir" rev-parse --short HEAD))"
+  else
+    say "Updated $(git -C "$dir" rev-parse --short "$before") -> $(git -C "$dir" rev-parse --short "$after")"
+    restart_notice
+  fi
+}
+
+cmd_status() {
+  dir=$1
+  printf 'tabi %s\nfolder: %s\n' "$VERSION" "$dir"
+  command -v git >/dev/null 2>&1 && echo "git: ok" || echo "git: MISSING (required)"
+  if command -v python3 >/dev/null 2>&1; then echo "python3: ok"; else echo "python3: missing (the sessions and backdrop mods need it)"; fi
+  if [ -d "$dir/.git" ]; then echo "checkout: $(git -C "$dir" rev-parse --short HEAD) on $(git -C "$dir" symbolic-ref --short -q HEAD || echo detached)"
+  else echo "checkout: not installed (run 'tabi install')"; fi
+}
+
+usage() {
+  cat <<EOF
+tabi $VERSION: install and update the tabi layout for Herdr
+
+Usage: tabi <command> [--dir <folder>]
+
+Commands:
+  install   Set up tabi in the Herdr config folder (updates it if already installed)
+  update    Pull the latest version (fast-forward only; refuses if you have local edits)
+  status    Show the folder, the installed version and what is missing
+  version   Print the tool version
+
+The folder defaults to \$HERDR_APP_HOME, else \${XDG_CONFIG_HOME:-~/.config}/herdr-app.
+EOF
+}
+
+command=${1:-help}
+[ $# -gt 0 ] && shift
+dir=$(default_dir)
+while [ $# -gt 0 ]; do
+  case $1 in
+    --dir) [ $# -ge 2 ] || die "--dir needs a folder"; dir=$2; shift 2 ;;
+    *) die "unknown option: $1" ;;
+  esac
+done
+
+case $command in
+  install) cmd_install "$dir" ;;
+  update) cmd_update "$dir" ;;
+  status) cmd_status "$dir" ;;
+  version|--version|-v) echo "tabi $VERSION" ;;
+  help|--help|-h) usage ;;
+  *) usage >&2; exit 1 ;;
+esac
