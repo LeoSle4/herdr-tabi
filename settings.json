@@ -11,5 +11,8 @@
   "terminal_scroll_speed": 1,
   "minimum_contrast": 1,
   "appearance": "dark",
-  "telemetry": false
+  "telemetry": false,
+  "worktrees": {
+    "directory": "~/Projects/worktrees"
+  }
 }
