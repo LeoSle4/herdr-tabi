@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, cardMessage, portraitOf, pushPayload, desktopCommand, FRESH_MS } from "./notify.js";
+import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, cardMessage, portraitOf, pushPayload, desktopCommand, FRESH_MS } from "./notify.js";
 
 const agent = (address, status, extra = {}) => ({ address, status, app: "claude-code", space_name: "herdr-tabi", ...extra });
 const TOPIC = "tabi-0123456789ab";
@@ -74,16 +74,16 @@ test("localMessage: reads like a bot, with the first line of what it said under 
 
 test("pushPayload: without details nothing but the program and the status leaves the machine", () => {
   const cfg = { topic: TOPIC, details: false };
-  assert.deepEqual(pushPayload(cfg, agent("t1", "blocked"), "Mai", "secret answer"), { topic: TOPIC, title: "Herdr: te necesita", message: "Claude Code necesita tu atención", priority: "high" });
-  assert.deepEqual(pushPayload(cfg, agent("t1", "done"), "Mai", "secret answer"), { topic: TOPIC, title: "Herdr: terminó", message: "Claude Code terminó", priority: "default" });
+  assert.deepEqual(pushPayload(cfg, agent("t1", "blocked"), "Mai", "secret answer"), { topic: TOPIC, title: "Herdr: te necesita", message: "Claude Code necesita tu atención", priority: 4 });
+  assert.deepEqual(pushPayload(cfg, agent("t1", "done"), "Mai", "secret answer"), { topic: TOPIC, title: "Herdr: terminó", message: "Claude Code terminó", priority: 3 });
   assert.equal(JSON.stringify(pushPayload(cfg, agent("t1", "done"), "Mai", "secret answer")).includes("secret"), false);
   assert.equal(JSON.stringify(pushPayload(cfg, agent("t1", "done"), "Mai", "x")).includes("herdr-tabi"), false);
 });
 
 test("pushPayload: with details it is the same message as on the desktop", () => {
   const cfg = { topic: TOPIC, details: true };
-  assert.deepEqual(pushPayload(cfg, agent("t1", "done"), "Mai", "Arreglé el CI"), { topic: TOPIC, title: "Mai terminó", message: "Arreglé el CI", priority: "default" });
-  assert.equal(pushPayload(cfg, agent("t1", "blocked"), "Mai", "").priority, "high");
+  assert.deepEqual(pushPayload(cfg, agent("t1", "done"), "Mai", "Arreglé el CI"), { topic: TOPIC, title: "Mai terminó · herdr-tabi", message: "Arreglé el CI", priority: 3 });
+  assert.equal(pushPayload(cfg, agent("t1", "blocked"), "Mai", "").priority, 4);
 });
 
 const card = { title: "Mai terminó · herdr-tabi", subtitle: "", body: "Listo, el PR quedó publicado.", image: "/h/data/tabi/portraits/mai.png" };
@@ -165,4 +165,21 @@ test("appendLog: stamped lines, one per entry, newest last, capped", () => {
   for (let i = 0; i < 100; i++) text = appendLog(text, `line ${i}`, t0, 5);
   assert.deepEqual(text.trim().split("\n").map((l) => l.slice(9)), ["line 95", "line 96", "line 97", "line 98", "line 99"]);
   assert.equal(appendLog("", "x".repeat(900), t0).length, 9 + 300 + 1); // a long line is cut
+});
+
+test("pushPayload: the priority is an integer 1 to 5, as ntfy wants in JSON (a word is rejected with a 400)", () => {
+  for (const details of [true, false]) {
+    for (const status of ["blocked", "done"]) {
+      const p = pushPayload({ topic: TOPIC, details }, agent("t1", status), "Mai", "x");
+      assert.equal(Number.isInteger(p.priority) && p.priority >= 1 && p.priority <= 5, true, `${status} details=${details}`);
+    }
+  }
+});
+
+test("parseCurl: the body and the status of what curl printed", () => {
+  assert.deepEqual(parseCurl('{"id":"abc","event":"message"}\n200'), { code: 200, body: '{"id":"abc","event":"message"}' });
+  assert.deepEqual(parseCurl('{"code":40001,"error":"invalid priority"}\n400\n'), { code: 400, body: '{"code":40001,"error":"invalid priority"}' });
+  assert.deepEqual(parseCurl("\n000"), { code: 0, body: "" });
+  assert.deepEqual(parseCurl(undefined), { code: 0, body: "" });
+  assert.equal(parseCurl("x".repeat(500) + "\n200").body.length, 200); // an answer is cut for the log
 });

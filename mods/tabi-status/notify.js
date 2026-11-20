@@ -89,9 +89,10 @@ export function localMessage(agent, name, said) {
  * and the status leaves the machine (the server belongs to somebody else).
  */
 export function pushPayload(cfg, agent, name, said) {
-  const priority = agent.status === "blocked" ? "high" : "default";
+  // In a JSON message ntfy wants an integer from 1 to 5 (the words "high" and "default" only work in the X-Priority header).
+  const priority = agent.status === "blocked" ? 4 : 3;
   if (cfg.details) {
-    const m = localMessage(agent, name, said);
+    const m = cardMessage(agent, name, said);
     return { topic: cfg.topic, title: m.title, message: m.body || m.title, priority };
   }
   const who = NAMES[agent.app] ?? "Un agente";
@@ -141,4 +142,11 @@ export function appendLog(text, line, now, keep = 80) {
   const lines = String(text ?? "").split("\n").filter(Boolean);
   lines.push(`${stamp} ${String(line).replace(/\s+/g, " ").slice(0, 300)}`);
   return lines.slice(-keep).join("\n") + "\n";
+}
+
+/** What curl printed with `-w "\n%{http_code}"`: the body of the answer and the HTTP status (0 when there was none). */
+export function parseCurl(stdout) {
+  const lines = String(stdout ?? "").replace(/\s+$/, "").split("\n");
+  const code = Number(lines.pop());
+  return { code: Number.isInteger(code) ? code : 0, body: lines.join(" ").trim().slice(0, 200) };
 }

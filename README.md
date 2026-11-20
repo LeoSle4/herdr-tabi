@@ -191,7 +191,8 @@ For an agent of another machine, or for Codex, the notification says the charact
 waits up to 8 seconds for its text and goes without it after that.
 
 If nothing shows, add `"debug": true` to `notify.json`, make an agent finish a turn while you are in another application, and read
-`data/tabi/notify.log`: it says whether the change was seen, whether Herdr counted as the active window, and how the command ended.
+`data/tabi/notify.log`: it says whether the change was seen, whether Herdr counted as the active window, and how each command ended
+(for the phone, the HTTP status of ntfy and its answer, which says what it did not like).
 
 Enable the **phone** on one machine only: every Herdr app sees every machine's agents, so two machines would send the same
 alert twice. Messages go through `curl`, which Windows includes. To change the sounds themselves, see below.
