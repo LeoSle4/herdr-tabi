@@ -30,12 +30,13 @@ export function keychainOutcome(code) {
 }
 
 /**
- * An expired (or refused, 401) login may be read from the Keychain again, but only once per login:
- * `rereadFor` is the expiry of the login that was already re-read. A re-read that brings back the same
- * login (Claude Code hasn't renewed it yet) is not repeated, so the prompt can't loop.
+ * An expired (or refused, 401) login may be read from the Keychain again when Claude Code has renewed it
+ * (a different expiry) or, if it hasn't yet, once per MIN_INTERVAL_MS. `last` is { expiresAt, at } of the
+ * previous re-read. The throttle keeps the meter recovering by itself without looping the prompt.
  */
-export function canReread(cred, rereadFor) {
-  return cred.state === "ok" && String(cred.expiresAt) !== rereadFor;
+export function canReread(cred, last, now) {
+  if (cred.state !== "ok") return false;
+  return !last || String(cred.expiresAt) !== last.expiresAt || now - last.at >= MIN_INTERVAL_MS;
 }
 
 export function tokenExpired(cred, now) {
