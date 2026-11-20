@@ -4,8 +4,8 @@
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, spaces, focused, theme, shared, machines, run, exec, appHome } from "herdr";
-import { parseConfig, snapshot, changes, message, endpoint } from "./notify.js";
+import { agents, spaces, focused, theme, shared, machines, run, exec, appHome, home, window as herdrWindow } from "herdr";
+import { parseConfig, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -13,12 +13,15 @@ const TIP = 10;
 export default class TabiStatus extends View {
   init(_props, cx) {
     cx.timer.every(30000, (cx) => cx.notify()); // the minutes until the next background change
-    cx.timer.every(5000, () => this.push()); // phone notifications; off until data/tabi/notify.json exists
+    this.pending = []; // changes waiting for the text the agent said (see flush)
+    cx.timer.every(5000, () => this.push()); // notifications outside Herdr; off until data/tabi/notify.json exists
+    cx.timer.every(1000, () => this.flush());
   }
 
   /**
-   * Sends a push (ntfy) when an agent turns blocked or done. Opt-in through <app home>/data/tabi/notify.json (see the
-   * README); enable it on one machine only, because every Herdr app sees every machine's agents. Failures stay silent.
+   * Notices an agent that turns blocked or done and queues it for flush(). Opt-in through <app home>/data/tabi/notify.json
+   * (see the README): a system notification when Herdr is not the active window, and/or a push to the phone through ntfy.
+   * Enable the phone on one machine only, because every Herdr app sees every machine's agents. Failures stay silent.
    */
   async push() {
     if (this.pushing) return;
@@ -33,15 +36,63 @@ export default class TabiStatus extends View {
       // The previous reading is kept even while the feature is off, so turning it on never floods old statuses.
       const events = cfg ? changes(this.pushSeen ?? null, list, cfg.on) : [];
       this.pushSeen = snapshot(list);
-      for (const a of events) {
-        const m = message(a, cfg.details);
-        await exec("curl", ["-fsS", "-m", "10", "-H", `Title: ${m.title}`, "-H", `Priority: ${m.priority}`, "-d", m.body, endpoint(cfg)], { timeout: 15000 })
-          .catch(() => {});
-      }
+      for (const agent of events) this.pending.push({ agent, at: Date.now(), tries: 0 });
     } catch {
-      // A failed reading or send is retried on the next tick.
+      // A failed reading is retried on the next tick.
     } finally {
       this.pushing = false;
+    }
+  }
+
+  /** What the agent said about this change (the Claude Code hook writes it on this machine), or "" (other machines, Codex). */
+  async saidAbout(item) {
+    if (item.agent.address.includes("/")) return "";
+    const dir = `${home()}/.local/state/tabi/subagents/${item.agent.address}`;
+    const read = async (file) => { try { return parseSaid(await fs.readFile(`${dir}/${file}`, "utf8")); } catch { return null; } };
+    const [stop, notification] = await Promise.all([read("_stop.json"), read("_notification.json")]);
+    return saidFor(item.agent.status, stop, notification, item.at);
+  }
+
+  /**
+   * Every second: delivers the queued changes. The hook and Herdr are not ordered (and a permission prompt is reported about
+   * 6 s late), so a change waits up to WAIT_TRIES seconds for its text, and goes without it after that.
+   */
+  async flush() {
+    if (this.flushing || !this.pending.length) return;
+    this.flushing = true;
+    try {
+      const cfg = this.pushConfig;
+      const waiting = [];
+      for (const item of this.pending) {
+        const wantsText = cfg && (cfg.desktop || cfg.details) && !item.agent.address.includes("/");
+        const said = wantsText ? await this.saidAbout(item) : "";
+        if (said || !wantsText || ++item.tries >= WAIT_TRIES) await this.deliver(item.agent, said, cfg);
+        else waiting.push(item);
+      }
+      this.pending = waiting;
+    } catch {
+      // delivered on the next tick
+    } finally {
+      this.flushing = false;
+    }
+  }
+
+  async deliver(agent, said, cfg) {
+    if (!cfg) return;
+    const name = nameOf(agent, shared("tabi.party"));
+    // The notification of the system only when Herdr is not what the person is looking at: inside Herdr there is already its own.
+    if (cfg.desktop && !herdrWindow()?.active) {
+      const platform = herdrWindow()?.platform ?? "linux";
+      if (platform === "macos" && this.terminalNotifier === undefined) {
+        this.terminalNotifier = await exec("sh", ["-c", "command -v terminal-notifier"], { timeout: 5000 }).then((r) => r.code === 0, () => false);
+      }
+      const m = localMessage(agent, name, said);
+      const c = desktopCommand(platform, m.title, m.body, { terminalNotifier: this.terminalNotifier, script: `${appHome()}/tools/desktop-notify.ps1` });
+      await exec(c.command, c.args, { timeout: 15000 }).catch(() => {});
+    }
+    if (cfg.topic) {
+      const payload = pushPayload(cfg, agent, name, said);
+      await exec("curl", ["-fsS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), cfg.server], { timeout: 15000 }).catch(() => {});
     }
   }
 

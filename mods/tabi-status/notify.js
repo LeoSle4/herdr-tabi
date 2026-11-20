@@ -1,25 +1,44 @@
-// Pure helpers for the push notifications of tabi-status: no Herdr calls, so they can be tested with `node --test`.
-// The feature is opt-in: it stays off until <app home>/data/tabi/notify.json exists and is valid.
+// Pure helpers for the notifications of tabi-status that leave Herdr (the phone through ntfy, the desktop through the system):
+// no Herdr calls, so they can be tested with `node --test`. Everything is opt-in: it stays off until
+// <app home>/data/tabi/notify.json exists and is valid.
 
 const EVENTS = ["blocked", "done"];
 const NAMES = { "claude-code": "Claude Code", codex: "Codex", pi: "Pi", opencode: "OpenCode", gemini: "Gemini" };
+const VERB = { blocked: "te necesita", done: "terminó" };
+
+/** How far from the moment of the change a recorded text may be to still be about it (the hook and Herdr are not ordered). */
+export const FRESH_MS = 30000;
+/** One try a second: a permission prompt is reported by Claude Code about 6 s after it appears. */
+export const WAIT_TRIES = 8;
 
 /**
- * Reads notify.json: { "topic": "tabi-<random>", "server": "https://ntfy.sh", "on": ["blocked","done"], "details": false }.
- * Returns null (feature off) when the file is not JSON, the topic is missing or too guessable, or the server is
- * given but is not an https address: a typo must never send the messages somewhere else.
+ * Reads notify.json:
+ *   { "desktop": true,                       a system notification when Herdr is not the active window
+ *     "topic": "tabi-<random>",              a push to the phone through ntfy (the topic is the only secret on ntfy.sh)
+ *     "server": "https://ntfy.sh",           your own ntfy server (https only)
+ *     "on": ["blocked", "done"],
+ *     "details": false }                     true: the push carries the character and the first line of what it said
+ * Returns null (everything off) when the file is not JSON, has neither `desktop` nor a good topic, or the topic is too
+ * guessable or the server is not https: a typo must never send the messages somewhere else.
  */
 export function parseConfig(text) {
   let c;
   try { c = JSON.parse(text); } catch { return null; }
-  if (!c || typeof c.topic !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(c.topic)) return null;
+  if (!c || typeof c !== "object") return null;
+  const desktop = c.desktop === true;
+  let topic = null;
   let server = "https://ntfy.sh";
-  if (c.server !== undefined) {
-    if (typeof c.server !== "string" || !/^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/?$/.test(c.server)) return null;
-    server = c.server.replace(/\/$/, "");
+  if (c.topic !== undefined) {
+    if (typeof c.topic !== "string" || !/^[A-Za-z0-9_-]{8,64}$/.test(c.topic)) return null;
+    topic = c.topic;
+    if (c.server !== undefined) {
+      if (typeof c.server !== "string" || !/^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/?$/.test(c.server)) return null;
+      server = c.server.replace(/\/$/, "");
+    }
   }
+  if (!topic && !desktop) return null;
   const on = Array.isArray(c.on) ? c.on.filter((e) => EVENTS.includes(e)) : EVENTS;
-  return { server, topic: c.topic, on, details: c.details === true };
+  return { server, topic, desktop, on, details: c.details === true };
 }
 
 /** Address -> status, for the agents of one reading. */
@@ -36,17 +55,54 @@ export function changes(prev, agents, on) {
   return agents.filter((a) => prev.has(a.address) && prev.get(a.address) !== a.status && on.includes(a.status));
 }
 
-function agentName(a) {
-  return NAMES[a.app] ?? "Un agente";
+/** A `_stop.json` / `_notification.json` file (see tools/tabi_subagents.py) as { text, at }, or null when it is not one. */
+export function parseSaid(text) {
+  let r;
+  try { r = JSON.parse(text); } catch { return null; }
+  if (!r || typeof r.text !== "string" || !r.text || typeof r.at !== "number") return null;
+  return { text: r.text, at: r.at };
 }
 
-/** Title, body and ntfy priority. The space name is sent only when `details` is on: the server is somebody else's. */
-export function message(agent, details) {
-  const who = details && agent.space_name ? `${agentName(agent)} en ${agent.space_name}` : agentName(agent);
-  if (agent.status === "blocked") return { title: "Herdr: te necesita", body: `${who} necesita tu atención`, priority: "high" };
-  return { title: "Herdr: terminó", body: `${who} terminó`, priority: "default" };
+/** What the agent said that this change is about: the end of its turn when it finished, what it waits for when blocked. */
+export function saidFor(status, stop, notification, at) {
+  const rec = status === "done" ? stop : status === "blocked" ? notification : null;
+  if (!rec || Math.abs(at - rec.at) > FRESH_MS) return "";
+  return rec.text;
 }
 
-export function endpoint(cfg) {
-  return `${cfg.server}/${cfg.topic}`;
+/** The agent's character (what tabi-party published) or, failing that, the program's name. */
+export function nameOf(agent, party) {
+  return party?.[agent.address]?.name ?? NAMES[agent.app] ?? "Un agente";
+}
+
+/** The notification as a bot would say it: "Mai terminó" over the first line of its answer (or the space when there is none). */
+export function localMessage(agent, name, said) {
+  return { title: `${name} ${VERB[agent.status]}`, body: said || agent.space_name || "" };
+}
+
+/**
+ * The JSON to publish on ntfy. With `details` it is the same message as on the desktop; without it, nothing but the program
+ * and the status leaves the machine (the server belongs to somebody else).
+ */
+export function pushPayload(cfg, agent, name, said) {
+  const priority = agent.status === "blocked" ? "high" : "default";
+  if (cfg.details) {
+    const m = localMessage(agent, name, said);
+    return { topic: cfg.topic, title: m.title, message: m.body || m.title, priority };
+  }
+  const who = NAMES[agent.app] ?? "Un agente";
+  if (agent.status === "blocked") return { topic: cfg.topic, title: "Herdr: te necesita", message: `${who} necesita tu atención`, priority };
+  return { topic: cfg.topic, title: "Herdr: terminó", message: `${who} terminó`, priority };
+}
+
+/** The program that shows a system notification, and its arguments, for each platform. Text goes as arguments, never in a shell line. */
+export function desktopCommand(platform, title, body, options = {}) {
+  if (platform === "macos") {
+    if (options.terminalNotifier) return { command: "terminal-notifier", args: ["-title", title, "-message", body || " ", "-group", "tabi"] };
+    return { command: "osascript", args: ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", title, body] };
+  }
+  if (platform === "windows") {
+    return { command: "powershell", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", options.script, "-Title", title, "-Body", body] };
+  }
+  return { command: "notify-send", args: ["--app-name=Herdr", "--", title, body] };
 }
