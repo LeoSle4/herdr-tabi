@@ -5,7 +5,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, focused, theme, shared, machines, run, exec, appHome, home, window as herdrWindow } from "herdr";
-import { parseConfig, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
+import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -36,12 +36,23 @@ export default class TabiStatus extends View {
       // The previous reading is kept even while the feature is off, so turning it on never floods old statuses.
       const events = cfg ? changes(this.pushSeen ?? null, list, cfg.on) : [];
       this.pushSeen = snapshot(list);
-      for (const agent of events) this.pending.push({ agent, at: Date.now(), tries: 0 });
+      for (const agent of events) {
+        this.pending.push({ agent, at: Date.now(), tries: 0 });
+        this.log(`queued ${agent.address} -> ${agent.status}`);
+      }
     } catch {
       // A failed reading is retried on the next tick.
     } finally {
       this.pushing = false;
     }
+  }
+
+  /** Writes one line to data/tabi/notify.log when "debug" is on in notify.json (the last 80 lines); never throws. */
+  log(line) {
+    if (!this.pushConfig?.debug) return;
+    this.logText = appendLog(this.logText, line, Date.now());
+    const text = this.logText;
+    fs.writeFile(`${appHome()}/data/tabi/notify.log`, text).catch(() => {});
   }
 
   /** What the agent said about this change (the Claude Code hook writes it on this machine), or "" (other machines, Codex). */
@@ -80,19 +91,25 @@ export default class TabiStatus extends View {
   async deliver(agent, said, cfg) {
     if (!cfg) return;
     const name = nameOf(agent, shared("tabi.party"));
+    const active = herdrWindow()?.active;
+    this.log(`deliver ${agent.address} ${agent.status} as "${name}" said="${said}" window.active=${active} desktop=${cfg.desktop} phone=${Boolean(cfg.topic)}`);
     // The notification of the system only when Herdr is not what the person is looking at: inside Herdr there is already its own.
-    if (cfg.desktop && !herdrWindow()?.active) {
+    if (cfg.desktop && !active) {
       const platform = herdrWindow()?.platform ?? "linux";
       if (platform === "macos" && this.terminalNotifier === undefined) {
         this.terminalNotifier = await exec("sh", ["-c", "command -v terminal-notifier"], { timeout: 5000 }).then((r) => r.code === 0, () => false);
       }
       const m = localMessage(agent, name, said);
       const c = desktopCommand(platform, m.title, m.body, { terminalNotifier: this.terminalNotifier, script: `${appHome()}/tools/desktop-notify.ps1` });
-      await exec(c.command, c.args, { timeout: 15000 }).catch(() => {});
+      await exec(c.command, c.args, { timeout: 15000 })
+        .then((r) => this.log(`desktop ${c.command} exit=${r.code} ${r.stderr ?? ""}`), (e) => this.log(`desktop ${c.command} failed: ${e}`));
+    } else if (cfg.desktop) {
+      this.log("desktop skipped: Herdr is the active window");
     }
     if (cfg.topic) {
       const payload = pushPayload(cfg, agent, name, said);
-      await exec("curl", ["-fsS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), cfg.server], { timeout: 15000 }).catch(() => {});
+      await exec("curl", ["-fsS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), cfg.server], { timeout: 15000 })
+        .then((r) => this.log(`phone curl exit=${r.code} ${r.stderr ?? ""}`), (e) => this.log(`phone curl failed: ${e}`));
     }
   }
 
