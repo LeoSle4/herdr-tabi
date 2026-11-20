@@ -140,3 +140,21 @@ test("card name: the character with a portrait, the account without one", () => 
   assert.equal(cardName(undefined, "claude2"), "claude2");
   assert.equal(cardName("", "codex"), "codex");
 });
+
+test("reconcilePortraits: the preferred character goes to the first agent without one", () => {
+  const files = ["a.png", "b.png", "c.png"];
+  const next = reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, "c.png");
+  assert.deepEqual(next, { old: "a.png", new: "c.png" });
+});
+
+test("reconcilePortraits: the preferred one is ignored when somebody already wears it, or it is not a portrait", () => {
+  const files = ["a.png", "b.png"];
+  assert.equal(reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, "a.png").new, "b.png");
+  assert.equal(reconcilePortraits(files, ["new"], {}, () => 0, "zzz.png").new, "a.png");
+});
+
+test("reconcilePortraits: only one agent gets the preferred character", () => {
+  const next = reconcilePortraits(["a.png", "b.png", "c.png"], ["x", "y"], {}, () => 0, "c.png");
+  assert.equal(next.x, "c.png");
+  assert.notEqual(next.y, "c.png");
+});

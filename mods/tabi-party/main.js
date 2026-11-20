@@ -12,7 +12,7 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -200,6 +200,7 @@ export default class TabiParty extends View {
       const samePaths = sameFiles && [...next].every(([f, v]) => v.path === this.thumbs.get(f)?.path);
       const first = !this.scanned;
       this.thumbs = next;
+      this.publishPortraits();
       this.scanned = true;
       const key = ignored.join("\n");
       if (key !== this.ignored) {
@@ -210,6 +211,15 @@ export default class TabiParty extends View {
     } finally {
       this.scanning = false;
     }
+  }
+
+  /** The characters (portrait files) for the "Asignar tarea…" dialog, published only when the list changed. */
+  publishPortraits() {
+    const list = [...this.thumbs].map(([file, v]) => ({ file, name: characterName(file) ?? file, thumb: v.path }));
+    const key = JSON.stringify(list);
+    if (key === this.portraitsKey) return;
+    this.portraitsKey = key;
+    setShared("tabi.portraits", list);
   }
 
   /** The unique id of an agent's portrait slot: its pane (it dies with the tab); the terminal's address if there is none. */
@@ -225,7 +235,13 @@ export default class TabiParty extends View {
     if (list.length) this.sawAgents = true;
     // At start the list can be empty for a moment: the saved assignments are kept until agents have been seen.
     if (!list.length && !this.sawAgents) return;
-    const next = reconcilePortraits([...this.thumbs.keys()], list.map((x) => this.idOf(x)), this.assign);
+    // "Asignar tarea…" asks for a character for the agent it is about to start: valid for a short while, used once.
+    const wish = shared("tabi.next-portrait");
+    const prefer = wish && Date.now() - wish.at < 20000 ? wish.file : null;
+    const next = reconcilePortraits([...this.thumbs.keys()], list.map((x) => this.idOf(x)), this.assign, Math.random, prefer);
+    if (wish && (!prefer || Object.values(next).includes(prefer) && !Object.values(this.assign).includes(prefer))) {
+      cx.spawn(async () => { setShared("tabi.next-portrait", null); });
+    }
     if (JSON.stringify(next) === JSON.stringify(this.assign)) return;
     this.assign = next;
     cx.spawn(async () => {
