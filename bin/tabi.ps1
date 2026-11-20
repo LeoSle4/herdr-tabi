@@ -9,7 +9,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '0.1.0'
+$Version = '0.2.0'
 $Repo = if ($env:TABI_REPO) { $env:TABI_REPO } else { 'https://github.com/LeoSle4/herdr-tabi.git' }
 $Branch = if ($env:TABI_BRANCH) { $env:TABI_BRANCH } else { 'main' }
 
@@ -72,6 +72,21 @@ function Install-Tabi {
   Restart-Notice
 }
 
+function Update-Self {
+  # A command installed by install.ps1 (in ~\.local\bin) follows the repository; one from another place does not.
+  $binDir = if ($env:TABI_BIN) { $env:TABI_BIN } else { Join-Path $HOME '.local\bin' }
+  $resolved = Resolve-Path -LiteralPath $binDir -ErrorAction SilentlyContinue
+  if (-not $resolved -or (Split-Path -Parent $PSCommandPath) -ne $resolved.Path) { return }
+  $source = Join-Path $Target 'bin\tabi.ps1'
+  if (-not (Test-Path -LiteralPath $source)) { return }
+  if ((Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $PSCommandPath).Hash) { return }
+  try {
+    Copy-Item -LiteralPath $source -Destination "$PSCommandPath.new" -Force
+    Move-Item -LiteralPath "$PSCommandPath.new" -Destination $PSCommandPath -Force
+    Say 'Updated the tabi command'
+  } catch { Say "could not update the tabi command: $($_.Exception.Message)" }
+}
+
 function Update-Tabi {
   if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail 'git is required: install it (winget install Git.Git) and run this again.' }
   if (-not (Test-Path -LiteralPath (Join-Path $Target '.git'))) { Fail "$Target is not a tabi checkout: run 'tabi install' first." }
@@ -82,6 +97,7 @@ function Update-Tabi {
   try { Invoke-Git fetch -q origin $Branch | Out-Null } catch { Fail "could not fetch $Repo ($Branch)" }
   try { Invoke-Git merge -q --ff-only "origin/$Branch" | Out-Null } catch { Fail "your $Branch diverged from origin/${Branch}: resolve it by hand." }
   $after = Invoke-Git rev-parse HEAD
+  Update-Self
   if ($before -eq $after) { Say "Already up to date ($(Invoke-Git rev-parse --short HEAD))" }
   else {
     Say "Updated $(Invoke-Git rev-parse --short $before) -> $(Invoke-Git rev-parse --short $after)"

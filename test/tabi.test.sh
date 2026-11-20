@@ -19,6 +19,8 @@ git clone -q "$ROOT/origin.git" "$ROOT/work" 2>/dev/null
 mkdir -p "$ROOT/work/mods/tabi-x"
 echo 'upstream' > "$ROOT/work/settings.json"
 echo 'mod v1' > "$ROOT/work/mods/tabi-x/main.js"
+mkdir -p "$ROOT/work/shell"
+cp "$(dirname "$TABI")/../shell/profile.sh" "$(dirname "$TABI")/../shell/starship.toml" "$ROOT/work/shell/"
 g -C "$ROOT/work" checkout -q -B main
 g -C "$ROOT/work" add -A
 g -C "$ROOT/work" commit -q -m one
@@ -29,7 +31,7 @@ run() { sh "$TABI" "$@"; }
 
 # 1. A fresh install into an empty folder.
 A="$ROOT/a"
-run install --dir "$A" >/dev/null
+run install --dir "$A" --no-shell >/dev/null
 check "install: tracked files arrive" '[ "$(cat "$A/mods/tabi-x/main.js")" = "mod v1" ]'
 check "install: folder is a checkout on main" '[ "$(git -C "$A" symbolic-ref --short HEAD)" = main ]'
 
@@ -38,7 +40,7 @@ B="$ROOT/b"
 mkdir -p "$B/data"
 echo 'mine' > "$B/settings.json"
 echo 'state' > "$B/data/state.json"
-run install --dir "$B" >/dev/null
+run install --dir "$B" --no-shell >/dev/null
 check "install over existing: file replaced" '[ "$(cat "$B/settings.json")" = upstream ]'
 check "install over existing: old file backed up" 'cat "$B"/.tabi-backup-*/settings.json | grep -qx mine'
 check "install over existing: untracked data untouched" '[ "$(cat "$B/data/state.json")" = state ]'
@@ -70,7 +72,28 @@ mkdir "$ROOT/empty"
 check "update: refuses a non-checkout" '! run update --dir "$ROOT/empty" >/dev/null 2>&1'
 
 # 8. Install on an installed folder updates it instead of failing.
-check "install again: behaves as update" 'run install --dir "$A" | grep -q "Already up to date"'
+check "install again: behaves as update" 'run install --dir "$A" --no-shell | grep -q "Already up to date"'
+
+# 9. tabi shell wires the rc file once, keeps what is already in it and leaves a backup.
+H="$ROOT/home"
+mkdir -p "$H"
+printf 'export FOO=1\n' > "$H/.zshrc"
+shell() { HOME="$H" SHELL="$1" sh "$TABI" shell --dir "$A" --no-install; }
+shell /bin/zsh >/dev/null
+shell /bin/zsh >/dev/null
+check "shell: one block after running twice" '[ "$(grep -c ">>> tabi shell >>>" "$H/.zshrc")" = 1 ]'
+check "shell: existing lines kept" 'grep -qx "export FOO=1" "$H/.zshrc"'
+check "shell: backup of the original" '[ "$(cat "$H/.zshrc.tabi-backup")" = "export FOO=1" ]'
+check "shell: block points at the checkout" 'grep -q "TABI_SHELL_DIR=\"$A/shell\"" "$H/.zshrc"'
+shell /bin/bash >/dev/null
+check "shell: bash uses .bashrc" 'grep -q ">>> tabi shell >>>" "$H/.bashrc"'
+check "shell: unknown shell touches no rc file" 'rm -f "$H/.zshrc" "$H/.bashrc"; shell /usr/bin/fish >/dev/null && [ ! -e "$H/.zshrc" ] && [ ! -e "$H/.bashrc" ]'
+check "shell: refuses without the profile file" '! HOME="$H" SHELL=/bin/zsh sh "$TABI" shell --dir "$ROOT/empty" --no-install >/dev/null 2>&1'
+
+# 10. The profile loads in bash and zsh, with and without the tools installed.
+check "profile: valid bash" 'bash -n "$A/shell/profile.sh"'
+check "profile: valid zsh" '! command -v zsh >/dev/null || zsh -n "$A/shell/profile.sh"'
+check "profile: loads with no tools on the PATH" 'PATH=/usr/bin:/bin TABI_SHELL_DIR="$A/shell" bash --norc -ic ". \"$A/shell/profile.sh\"; echo loaded" 2>/dev/null | grep -q loaded'
 
 if [ "$FAILS" -ne 0 ]; then printf '\n%s test(s) failed\n' "$FAILS"; exit 1; fi
 printf '\nall passed\n'
