@@ -1,6 +1,7 @@
 // tabi-party: "使者 · agentes". One card per agent: accent strip by state (cream working, amber waiting, gray idle),
 // round portrait, the portrait's character name (Mai, Kazuto...; the account, claude/claude2/codex, without a portrait and in the tooltip), status kanji, "space · task" and a 2 px bar. The right edge is cut on a diagonal with two SVG
 // shapes (the engine has no clip-path): a triangle in the sidebar's color and a hairline on its edge.
+// Under the card of an agent that runs on this machine, its Claude Code sub-agents (see subagents.js and tools/tabi_subagents.py).
 // Portraits: every png/jpg in ~/Documents/retratos/ (any name; also files without extension whose content is a png or jpeg;
 // anything else is named in a notification and ignored). Each agent gets one at random when it appears, by the unique id of
 // its pane (not by its account), and keeps it while it lives (data/tabi/portraits.json); a new agent gets one that no
@@ -10,12 +11,15 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
+import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
 import { statusInfo, accountNames, cardName, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
 const thumbDir = () => `${appHome()}/data/tabi/portraits`;
 const assignFile = () => `${appHome()}/data/tabi/portraits.json`;
+// Where the Claude Code hook (tools/tabi_subagents.py) writes one folder per terminal id, one JSON file per sub-agent.
+const subagentRoot = () => `${home()}/.local/state/tabi/subagents`;
 const num = (text, key) => Number(new RegExp(`${key}:\\s*(\\d+)`).exec(text)?.[1]);
 // Windows has no sips, stat or file: portraits.ps1 (PowerShell, System.Drawing) lists the folder and cuts the thumbnails.
 const onWindows = () => herdrWindow()?.platform === "windows";
@@ -44,6 +48,8 @@ export default class TabiParty extends View {
     this.scanning = false; // one folder scan at a time
     this.sawAgents = false; // agents were seen at least once: an empty list afterwards means they all closed
     this.ignored = ""; // the ignored files last reported
+    this.subs = {}; // agent address (this machine's terminals only) -> the records of its sub-agents
+    this.subsKey = "";
     if (checking()) return;
     cx.spawn(async (cx) => {
       try { this.assign = JSON.parse(await fs.readFile(assignFile(), "utf8")); } catch { /* none yet */ }
@@ -52,6 +58,8 @@ export default class TabiParty extends View {
     });
     cx.timer.every(15000, (cx) => cx.spawn(async (cx) => { if (await this.scan()) cx.notify(); }));
     cx.timer.every(6000, (cx) => cx.spawn(async (cx) => { if (await this.detect()) cx.notify(); }));
+    // Sub-agents: re-read every 3 s; redraw when something changed or while one runs (its elapsed time moves).
+    cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { if ((await this.loadSubs()) || this.runningSubs()) cx.notify(); }));
     cx.spawn(async (cx) => { if (await this.detect()) cx.notify(); });
   }
 
@@ -75,6 +83,56 @@ export default class TabiParty extends View {
       } catch { /* the terminal went away, or no ps: keep what we know */ }
     }
     return changed;
+  }
+
+  /** Reads the sub-agent records of the agents that run on this machine (another machine's hook writes on that machine).
+   *  Resolves true when something changed. */
+  async loadSubs() {
+    const next = {};
+    for (const a of agents()) {
+      if (a.address.includes("/")) continue;
+      let names;
+      try { names = await fs.readdir(`${subagentRoot()}/${a.address}`); } catch { continue; }
+      const records = [];
+      for (const name of names) {
+        if (!name.endsWith(".json")) continue;
+        try {
+          const rec = parseRecord(await fs.readFile(`${subagentRoot()}/${a.address}/${name}`, "utf8"));
+          if (rec) records.push(rec);
+        } catch { /* removed while reading */ }
+      }
+      if (records.length) next[a.address] = records;
+    }
+    const key = JSON.stringify(next);
+    const changed = key !== this.subsKey;
+    this.subs = next;
+    this.subsKey = key;
+    return changed;
+  }
+
+  runningSubs() {
+    return Object.values(this.subs).some((records) => records.some((r) => r.status === "running"));
+  }
+
+  /** The strip under a card with its sub-agents: "働 Explore  12 s" while it runs, "済 Explore  <what it reported>" after. */
+  subRows(a, t) {
+    try { return this.buildSubRows(a, t); } catch { return null; } // the strip is a bonus: it must never take the cards down
+  }
+
+  buildSubRows(a, t) {
+    const now = Date.now();
+    const { rows, more } = visibleRows(this.subs[a.address] ?? [], a.status, now);
+    if (!rows.length) return null;
+    return v_flex().w(W).bg(t.surface).border_l(0.5).border_b(0.5).border_color(t.border).py(3)
+      .children(rows.map((r, i) => {
+        const info = rowInfo(r, now);
+        return h_flex().id(`sub-${a.address}-${i}`).h(20).items_center().gap(6).pl(17).pr(14)
+          .when(Boolean(r.summary), (el) => el.tooltip(r.summary))
+          .child(div().w(12).flex_none().text_size(11).text_color(info.busy ? t.solid : t.idle).child(info.kanji))
+          .child(div().flex_none().text_size(11.5).text_color(t.muted).child(r.type))
+          .child(div().flex_1().min_w(0).truncate().text_size(10.5).font_light().text_color(t.dim).child(info.detail));
+      }))
+      .when(more > 0, (el) => el.child(div().pl(35).h(18).text_size(10.5).font_light().text_color(t.dim).child(`+${more} más`)));
   }
 
   /** The centered square thumbnail of a source image (sips on macOS); the original, uncropped, where sips is missing. */
@@ -238,7 +296,12 @@ export default class TabiParty extends View {
     const names = accountNames(list, detected);
     const body = v_flex().gap(8).px(12).pb(12);
     this.publish(list, names, cx);
-    for (const a of list) body.child(this.card(a, t, cardName(this.assign[this.idOf(a)], names[a.address]), names[a.address]));
+    for (const a of list) {
+      const tail = this.subRows(a, t);
+      body.child(v_flex().id(`group-${a.address}`).flex_none()
+        .child(this.card(a, t, cardName(this.assign[this.idOf(a)], names[a.address]), names[a.address]))
+        .when(Boolean(tail), (el) => el.child(tail)));
+    }
     if (!list.length) body.child(div().py(8).text_size(11.5).font_light().text_color(t.dim).child("Ningún agente activo."));
     return v_flex().id("tabi-party").size_full().bg(t.chrome).overflow_hidden()
       .child(div().id("tabi-party-list").flex_1().min_h(0).overflow_y_scrollbar()
