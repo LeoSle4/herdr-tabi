@@ -172,3 +172,6 @@ finally {
 
 if ($script:fails -ne 0) { Write-Host "`n$($script:fails) test(s) failed"; exit 1 }
 Write-Host "`nall passed"
+# Some tests run tabi to prove that it fails, and the last one leaves $LASTEXITCODE at 1. GitHub's pwsh steps end with
+# `exit $LASTEXITCODE`, so a green run would be reported as a failure: leave a clean code.
+exit 0
