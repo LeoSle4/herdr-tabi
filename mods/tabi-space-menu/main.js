@@ -1,13 +1,13 @@
 // tabi-space-menu: what the "+" of the spaces list opens. "~ inicio", the 6 most recently modified projects of the
-// project folders and "Elegir carpeta…" (the system's folder picker). A folder that already has a space is not
-// duplicated: that space is shown and a short note says so.
+// project folders and "Elegir carpeta…" (the system's folder picker). A folder that already has a space can still get
+// another one (tabi-spaces tells repeated names apart with a suffix); those entries carry a dim "abierto" note.
 // Project folders: the "projectFolders" list of <app home>/tabi.json, e.g. { "projectFolders": ["~/Projects", "D:\\Code"] }
 // ("~" and %USERPROFILE% work at the start). Without it: ~/Projects, then ~/Documents/Projects (on Windows also the real,
 // possibly OneDrive-redirected, Documents). Only the ones that exist count, and a folder that is a symlink or junction
 // to an earlier one is skipped, so no project shows twice.
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, panes, home, appHome, run, exec, readTextFile, notify, pickFolder, closeOverlay, props, theme, checking, window as herdrWindow } from "herdr";
+import { spaces, panes, home, appHome, run, exec, readTextFile, pickFolder, closeOverlay, props, theme, checking, window as herdrWindow } from "herdr";
 import { findSpaceByFolder, recentFromPaths, shellQuote, projectFolders, usableFolders } from "./lib.js";
 
 const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
@@ -75,16 +75,10 @@ export default class TabiSpaceMenu extends View {
     });
   }
 
-  /** Opens the folder as a space, or shows the one that already has it. */
+  /** Opens the folder as a new space, even when another space already has it. */
   open(folder) {
-    const existing = findSpaceByFolder(spaces(), whereOf, folder);
     closeOverlay(props().overlay);
-    if (existing) {
-      run("space.select", { id: existing.id });
-      notify({ title: "Ya existe un espacio con esa carpeta", body: `Te llevé a «${existing.name}»`, level: "info", timeout: 3500 });
-    } else {
-      run("space.new", { folder });
-    }
+    run("space.new", { folder });
   }
 
   choose(cx) {
@@ -106,13 +100,18 @@ export default class TabiSpaceMenu extends View {
       .when(Boolean(hint), (el) => el.child(div().flex_none().text_size(10.5).font_light().text_color(t.dim).child(hint)));
   }
 
+  /** "abierto" when a space already has the folder, so a second click is a choice and not an accident. */
+  openHint(folder) {
+    return findSpaceByFolder(spaces(), whereOf, folder) ? "abierto" : "";
+  }
+
   render() {
     const t = theme();
     const label = (text) => div().px(12).pt(8).pb(2).text_size(10.5).font_light().text_color(t.dim).child(text);
     return v_flex().id("tabi-space-menu").size_full().py(4)
-      .child(this.item("menu-home", "mods/tabi-spaces/house.svg", "~ inicio", () => this.open(home()), t))
+      .child(this.item("menu-home", "mods/tabi-spaces/house.svg", "~ inicio", () => this.open(home()), t, this.openHint(home())))
       .child(label("Proyectos recientes"))
-      .children(this.recent.map((r) => this.item(`menu-${r.name}`, "mods/tabi-spaces/folder.svg", r.name, () => this.open(r.path), t)))
+      .children(this.recent.map((r) => this.item(`menu-${r.name}`, "mods/tabi-spaces/folder.svg", r.name, () => this.open(r.path), t, this.openHint(r.path))))
       .when(!this.recent.length, (el) => el.child(div().px(12).py(4).text_size(11.5).font_light().text_color(t.dim).child("Sin proyectos.")))
       .child(div().h(0.5).mx(8).my(6).bg(t.border))
       .child(this.item("menu-pick", "mods/tabi-spaces/folder.svg", "Elegir carpeta…", (_e, cx) => this.choose(cx), t));
