@@ -121,7 +121,7 @@ export function parseFolder(out) {
  * holds the same one (the later one is given another); agents without one (new ones) take a portrait no other agent has.
  * Portraits repeat only when there are more agents than images. Agents that are gone are dropped, which frees theirs.
  */
-export function reconcilePortraits(files, liveIds, current, random = Math.random) {
+export function reconcilePortraits(files, liveIds, current, random = Math.random, prefer = null) {
   const next = {};
   if (!files.length) return next;
   const firstHolder = new Map();
@@ -130,8 +130,11 @@ export function reconcilePortraits(files, liveIds, current, random = Math.random
     if (files.includes(f) && !firstHolder.has(f)) firstHolder.set(f, id);
   }
   for (const [f, id] of firstHolder) next[id] = f;
+  // The character picked in "Asignar tarea…" goes to the first agent that has none yet, and only if nobody wears it.
+  let wanted = prefer && files.includes(prefer) && !Object.values(next).includes(prefer) ? prefer : null;
   for (const id of liveIds) {
     if (next[id]) continue;
+    if (wanted) { next[id] = wanted; wanted = null; continue; }
     next[id] = pickPortrait(files, Object.values(next), random);
   }
   return next;
