@@ -107,8 +107,26 @@ class Events(Tmp):
         rec = read(self.path())
         self.assertEqual((rec["status"], rec["started"], rec["ended"], rec["summary"]), ("done", 1000, 5000, "Found 3 files."))
 
-    def test_stop_without_a_start_still_records_it(self):
+    def test_a_typed_stop_without_a_start_is_still_recorded(self):
+        # a quick sub-agent: its stop can be handled before its start has been written
         self.stop()
+        self.assertEqual(read(self.path())["status"], "done")
+
+    def test_a_bare_stop_is_an_internal_agent_and_is_ignored(self):
+        # Claude Code runs agents of its own (the suggestion of what you may type next) and reports a SubagentStop with
+        # no start and no agent_type: they are not work the person asked for
+        ts.handle({"hook_event_name": "SubagentStop", "agent_id": "a6716", "last_assistant_message": "ya lo ejecuté"}, "t1d", self.root, 1)
+        ts.handle({"hook_event_name": "SubagentStop", "agent_id": "a6717", "agent_type": "", "last_assistant_message": "x"}, "t1d", self.root, 1)
+        self.assertEqual(os.listdir(self.root), [])
+
+    def test_a_late_start_does_not_bring_a_finished_one_back(self):
+        self.stop(now=2000)
+        self.start(now=3000)
+        self.assertEqual(read(self.path())["status"], "done")
+
+    def test_a_stop_of_a_started_sub_agent_without_a_type_still_closes_it(self):
+        self.start()
+        ts.handle({"hook_event_name": "SubagentStop", "agent_id": "agent-1", "last_assistant_message": "ok"}, "t1d", self.root, 5000)
         self.assertEqual(read(self.path())["status"], "done")
 
     def test_parallel_sub_agents_do_not_overwrite_each_other(self):

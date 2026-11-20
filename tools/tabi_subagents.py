@@ -50,6 +50,7 @@ def summarize(text, limit=MAX_SUMMARY):
 
 
 def _write(path, record):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.tmp-{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False)
@@ -122,13 +123,19 @@ def handle(event, terminal, root=None, now_ms=None):
     agent_id = safe(event.get("agent_id"))
     if name not in ("SubagentStart", "SubagentStop") or not agent_id:
         return
-    os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, agent_id + ".json")
-    kind = str(event.get("agent_type") or "agent")[:40]
+    agent_type = str(event.get("agent_type") or "")[:40]
+    existing = _read(path)
     if name == "SubagentStart":
-        _write(path, {"type": kind, "status": "running", "started": now_ms, "ended": None, "summary": ""})
+        if existing and existing.get("status") == "done":
+            return  # the stop of a very quick one can be handled before its start: never bring it back to "running"
+        _write(path, {"type": agent_type or "agent", "status": "running", "started": now_ms, "ended": None, "summary": ""})
     else:
-        rec = _read(path) or {"type": kind, "started": now_ms}
+        # A stop with no start and no type is not a sub-agent of the work: Claude Code runs internal agents too (the
+        # suggestion of what you may type next, for one) and reports them as a bare SubagentStop. Those are not shown.
+        if not existing and not agent_type:
+            return
+        rec = existing or {"type": agent_type, "started": now_ms}
         rec.update(status="done", ended=now_ms, summary=summarize(event.get("last_assistant_message")))
         _write(path, rec)
     prune(folder, now_ms)
