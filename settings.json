@@ -1,7 +1,9 @@
 {
   "zoom": 1,
   "sounds": {
-    "enabled": true
+    "enabled": true,
+    "blocked": "sounds/blocked.mp3",
+    "done": "sounds/done.mp3"
   },
   "font_ligatures": false,
   "terminal_line_height": 1,
