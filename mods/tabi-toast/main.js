@@ -1,16 +1,43 @@
 // tabi-toast: how notifications look. When a notification is about an agent (its click action targets one), it is drawn as that
-// agent's card: round portrait, the character's name, the status kanji (済 finished, 待 waiting) and "space · status", with an
-// accent strip in the status color. Anything else (a login prompt, an error, a plain toast) keeps Herdr's own look.
+// agent's card: round portrait, the character's name and space, the status kanji (済 finished, 待 waiting) and a line like a bot
+// message: "terminó: <first line of its final answer>" or "te espera: <what it asks>", with an accent strip in the status color.
+// The text comes from the Claude Code hook (tools/tabi_subagents.py: Stop and Notification); Codex agents show just the status. Anything else (a login prompt, an error, a plain toast) keeps Herdr's own look.
 // Chosen in layouts/tabi.json with "toast": "tabi-toast". The portrait and the name come from what tabi-party publishes.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { props, closeOverlay, run, theme, agents, shared } from "herdr";
-import { agentOf, look, subline } from "./lib.js";
+import * as fs from "fs/promises";
+import { props, closeOverlay, run, theme, agents, shared, home, checking } from "herdr";
+import { agentOf, look, subline, parseSaid, saidFor } from "./lib.js";
 
 const PORTRAIT = 34;
+const TRIES = 12; // the text can land a few seconds after the toast opens (a permission prompt is reported about 6 s late)
+const saidDir = (address) => `${home()}/.local/state/tabi/subagents/${address}`;
 const DOT = { error: "blocked", warning: "working", success: "done", info: "accent" };
 
 export default class TabiToast extends View {
+  init(_props, cx) {
+    this.said = "";
+    this.tries = 0;
+    this.openedAt = Date.now();
+    if (checking()) return;
+    const agent = agentOf((props() ?? {}).action, agents());
+    if (!agent || agent.address.includes("/")) return; // another machine's hook writes on that machine
+    this.address = agent.address;
+    cx.spawn(async (cx) => { await this.loadSaid(cx); });
+    cx.timer.every(1000, (cx) => { if (!this.said && ++this.tries <= TRIES) cx.spawn(async (cx) => { await this.loadSaid(cx); }); });
+  }
+
+  async readSaid(file) {
+    try { return parseSaid(await fs.readFile(`${saidDir(this.address)}/${file}`, "utf8")); } catch { return null; }
+  }
+
+  async loadSaid(cx) {
+    const [stop, notification] = await Promise.all([this.readSaid("_stop.json"), this.readSaid("_notification.json")]);
+    const status = agents().find((a) => a.address === this.address)?.status;
+    const said = saidFor(status, stop, notification, this.openedAt);
+    if (said !== this.said) { this.said = said; cx.notify(); }
+  }
+
   /** Clicking runs the notification's action (go to the agent) and dismisses it. */
   go(p) {
     if (p.action?.name) run(p.action.name, p.action.args ?? {});
@@ -32,10 +59,13 @@ export default class TabiToast extends View {
       .child(h_flex().h_full().items_center().gap(12).pl(17).pr(18)
         .child(portrait)
         .child(v_flex().flex_1().min_w(0).gap(3)
-          .child(h_flex().justify_between().items_baseline()
-            .child(div().truncate().font_semibold().text_size(13).text_color(t.foreground).child(name))
-            .child(div().text_size(14).text_color(accent).child(l.kanji)))
-          .child(div().truncate().text_size(11.5).font_light().text_color(t.muted).child(subline(agent, l.label)))));
+          .child(h_flex().justify_between().items_baseline().gap(8)
+            .child(h_flex().flex_1().min_w(0).items_baseline().gap(6)
+              .child(div().flex_none().font_semibold().text_size(13).text_color(t.foreground).child(name))
+              .child(div().truncate().text_size(11).font_light().text_color(t.dim).child(agent.space_name ?? "")))
+            .child(div().flex_none().text_size(14).text_color(accent).child(l.kanji)))
+          .child(div().id("toast-said").truncate().text_size(11.5).font_light().text_color(t.muted)
+            .when(Boolean(this.said), (el) => el.tooltip(this.said)).child(subline(l.label, this.said)))));
   }
 
   /** Herdr's own look, kept for everything that is not about an agent (including its "needs login" prompt with a copy button). */

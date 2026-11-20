@@ -16,7 +16,7 @@ they are not terminals. A small Claude Code hook records them, and the card of t
 
 ## How it works
 
-1. Claude Code runs `tools/tabi_subagents.py` on `SubagentStart`, `SubagentStop` and `SessionEnd`.
+1. Claude Code runs `tools/tabi_subagents.py` on `SubagentStart`, `SubagentStop`, `Stop`, `Notification` and `SessionEnd`.
 2. Herdr puts the id of the terminal in `HC_TERMINAL_ID`, so the hook knows which card the event belongs to.
 3. The hook writes one small file per sub-agent in `~/.local/state/tabi/subagents/<terminal id>/`. One file each, so parallel
    sub-agents never overwrite each other.
@@ -28,10 +28,10 @@ The hook runs in the background (`async`), prints nothing and always exits 0: it
 
 ```bash
 python3 tools/tabi_subagents.py install      # Windows: python tools\tabi_subagents.py install
-python3 tools/tabi_subagents.py status       # all three should say ok
+python3 tools/tabi_subagents.py status       # all five should say ok
 ```
 
-It adds three entries to `~/.claude/settings.json` and keeps everything else (the first time it saves a copy as
+It adds five entries to `~/.claude/settings.json` and keeps everything else (the first time it saves a copy as
 `settings.json.tabi-backup`). Running it again changes nothing. For another account:
 `python3 tools/tabi_subagents.py install --config-dir ~/.claude-cuenta2`. To undo it: `... uninstall`.
 
@@ -49,6 +49,23 @@ printf '%s' '{"hook_event_name":"SubagentStop","agent_id":"demo","agent_type":"E
 
 A finished row shows on the card for two minutes. A running one only shows while its agent is working or waiting: if the
 agent is idle, a "running" record is what a crash left behind and is hidden.
+
+## What an agent says, in its notification
+
+The same hook also listens to `Stop` (a turn ended) and `Notification` (Claude asks for something). It keeps the first line, 140
+characters at most, in `_stop.json` and `_notification.json` next to the sub-agent files. The notification that `tabi-toast`
+draws as the agent's card then reads like a bot message:
+
+- finished: `済  terminó: Listo, el PR quedó publicado.`
+- waiting: `待  te espera: Claude needs your permission to use Bash`
+
+Only a text recorded within 30 seconds of the notification is shown, so an old answer never appears under a new one. The hooks
+are not ordered with Herdr's status change, so the toast looks for the text for about 12 seconds; a permission prompt is
+reported by Claude Code about 6 seconds after it appears and can still be late. Without the text, the card shows just the status.
+`idle_prompt` reminders are ignored. Codex agents have no hook here, so they show just the status.
+
+If you installed the hooks before this existed, run `install` again: `status` will say `Stop` and `Notification` are missing.
+The text stays on this machine and is not sent to ntfy.
 
 ## Limits
 

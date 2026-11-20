@@ -24,6 +24,68 @@ class Tmp(unittest.TestCase):
         self.root = self._dir.name
 
 
+class Said(Tmp):
+    def stop(self, message, terminal="t1d", now=7000):
+        ts.handle({"hook_event_name": "Stop", "last_assistant_message": message}, terminal, self.root, now)
+
+    def notify(self, message, kind="permission_prompt", terminal="t1d", now=8000):
+        ts.handle({"hook_event_name": "Notification", "message": message, "notification_type": kind}, terminal, self.root, now)
+
+    def file(self, name, terminal="t1d"):
+        return os.path.join(self.root, terminal, name)
+
+    def test_stop_records_the_first_line_of_the_final_answer(self):
+        self.stop("\nListo: arreglé el CI.\nDetalle largo...")
+        self.assertEqual(read(self.file("_stop.json")), {"text": "Listo: arreglé el CI.", "at": 7000})
+
+    def test_a_long_first_line_is_cut_for_the_card(self):
+        self.stop("x" * 500)
+        text = read(self.file("_stop.json"))["text"]
+        self.assertEqual(len(text), ts.MAX_SAID)
+        self.assertTrue(text.endswith("…"))
+
+    def test_a_newer_stop_replaces_the_older_one(self):
+        self.stop("first", now=1000)
+        self.stop("second", now=9000)
+        self.assertEqual(read(self.file("_stop.json")), {"text": "second", "at": 9000})
+
+    def test_notifications_that_wait_for_the_person_are_recorded(self):
+        for kind in ts.WAITING:
+            self.notify(f"needs {kind}", kind=kind)
+            self.assertEqual(read(self.file("_notification.json"))["text"], f"needs {kind}")
+
+    def test_other_notifications_are_not(self):
+        self.notify("Claude is waiting for your input", kind="idle_prompt")
+        self.notify("logged in", kind="auth_success")
+        self.notify("no type at all", kind=None)
+        self.assertFalse(os.path.exists(self.file("_notification.json")))
+
+    def test_empty_text_records_nothing(self):
+        self.stop("")
+        self.stop(None)
+        self.stop("   \n  ")
+        self.assertFalse(os.path.exists(self.file("_stop.json")))
+
+    def test_what_was_said_is_not_a_sub_agent_and_is_never_pruned_as_one(self):
+        self.stop("hello", now=1000)
+        for i in range(ts.MAX_FILES + 5):
+            ts.handle({"hook_event_name": "SubagentStart", "agent_id": f"a{i:03d}", "agent_type": "x"}, "t1d", self.root, 2000 + i)
+        self.assertTrue(os.path.exists(self.file("_stop.json")))
+
+    def test_a_very_old_one_is_dropped_by_the_next_event(self):
+        self.stop("ancient", now=0)
+        self.stop("recent", terminal="t1d", now=(ts.STALE_S + 10) * 1000)
+        self.assertEqual(read(self.file("_stop.json"))["text"], "recent")
+        self.notify("ancient too", now=0)
+        self.stop("later", now=(ts.STALE_S + 20) * 1000)
+        self.assertFalse(os.path.exists(self.file("_notification.json")))
+
+    def test_session_end_removes_it_too(self):
+        self.stop("bye")
+        ts.handle({"hook_event_name": "SessionEnd"}, "t1d", self.root, 9000)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "t1d")))
+
+
 class Events(Tmp):
     def start(self, terminal="t1d", agent_id="agent-1", kind="Explore", now=1000):
         ts.handle({"hook_event_name": "SubagentStart", "agent_id": agent_id, "agent_type": kind}, terminal, self.root, now)
