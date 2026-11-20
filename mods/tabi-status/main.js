@@ -5,7 +5,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, focused, theme, shared, machines, run, exec, appHome, home, window as herdrWindow } from "herdr";
-import { parseConfig, appendLog, snapshot, changes, parseSaid, saidFor, nameOf, cardMessage, portraitOf, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
+import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, cardMessage, portraitOf, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -128,8 +128,10 @@ export default class TabiStatus extends View {
     }
     if (cfg.topic) {
       const payload = pushPayload(cfg, agent, name, said);
-      await exec("curl", ["-fsS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), cfg.server], { timeout: 15000 })
-        .then((r) => this.log(`phone curl exit=${r.code} ${r.stderr ?? ""}`), (e) => this.log(`phone curl failed: ${e}`));
+      // No -f: with it curl hides the body of an error, and ntfy says there what it did not like.
+      await exec("curl", ["-sS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), "-w", "\n%{http_code}", cfg.server], { timeout: 15000 })
+        .then((r) => { const a = parseCurl(r.stdout); this.log(`phone curl exit=${r.code} http=${a.code} ${a.body} ${r.stderr ?? ""}`); },
+          (e) => this.log(`phone curl failed: ${e}`));
     }
   }
 
