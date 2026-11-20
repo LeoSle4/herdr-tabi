@@ -53,22 +53,32 @@ Pass `--dir <folder>` (`-Dir` on Windows) to use another folder. By default it i
 `~/.config/herdr-app`; on Windows the first of `~\.config\herdr-app`, `%APPDATA%\herdr-app` and
 `%LOCALAPPDATA%\herdr-app` that exists.
 
-## Windows prompt and autocompletion
+## Windows prompt and terminal extras
+
+`tabi install` finishes by asking whether to install the terminal extras. Say yes there, or run it any time:
 
 ```powershell
 tabi shell
 ```
 
-Installs Starship and zoxide with `winget` if they are missing and adds one block to your PowerShell profiles (Windows
-PowerShell and PowerShell 7). The block only loads `shell/profile.ps1`, so a later `tabi update` changes the setup
-without touching the profile again.
+(`tabi install -WithShell` accepts without asking, `-NoShell` skips the question.) It installs, with `winget`, what is
+missing of: Starship, zoxide, fzf, eza, bat, PowerShell 7 and the JetBrainsMono Nerd Font; adds the PSFzf module; and adds
+one block to your PowerShell profiles (Windows PowerShell and PowerShell 7). The block only loads `shell/profile.ps1`, so
+a later `tabi update` changes the setup without touching the profile again. If a package cannot be installed it says so
+and goes on.
 
-- **Prompt:** the same Starship look as on macOS (`shell/starship.toml`). The branch symbol needs a Nerd Font set in
-  your terminal.
+It mirrors the macOS zsh setup:
+
+- **Prompt:** the same Starship look (`shell/starship.toml`).
 - **Autocompletion:** a gray suggestion from your history appears as you type; Right arrow accepts it. Tab opens a menu
-  of matching files and folders (`cd her`, Tab). It needs PSReadLine 2.2 or newer: PowerShell 7 has it, Windows
-  PowerShell 5.1 needs `Install-Module PSReadLine -Force`.
+  of matching files and folders (`cd her`, Tab). Predictions need PSReadLine 2.2 or newer, which PowerShell 7 includes;
+  Windows PowerShell 5.1 does not have them, so run Herdr's shell with `pwsh`.
 - **Smart cd:** `z her` jumps to the folder you visit most that matches "her".
+- **Fuzzy finder:** Ctrl+R searches history, Ctrl+T picks a file.
+- **`ls`, `ll` and `cat`** go through eza and bat when they are installed.
+
+Herdr's terminal already uses JetBrains Mono, the same font as Ghostty. If the branch symbol shows as an empty box in
+another terminal, set "JetBrainsMono Nerd Font" there.
 
 ## What an install touches
 

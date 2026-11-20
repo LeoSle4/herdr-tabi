@@ -24,3 +24,20 @@ if (Get-Module -ListAvailable -Name PSReadLine) {
 if (Get-Command zoxide -ErrorAction SilentlyContinue) {
   Invoke-Expression (& { (zoxide init powershell | Out-String) })
 }
+
+# Fuzzy finder, like `fzf --zsh` on macOS: Ctrl+R searches history, Ctrl+T picks a file.
+if ((Get-Command fzf -ErrorAction SilentlyContinue) -and (Get-Module -ListAvailable -Name PSFzf)) {
+  Import-Module PSFzf
+  Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+}
+
+# Same shortcuts as the macOS zsh setup: ls and ll through eza, cat through bat.
+if (Get-Command eza -ErrorAction SilentlyContinue) {
+  Remove-Item Alias:ls -ErrorAction SilentlyContinue
+  function ls { eza --icons --git @args }
+  function ll { eza -la --icons --git @args }
+}
+if (Get-Command bat -ErrorAction SilentlyContinue) {
+  Remove-Item Alias:cat -ErrorAction SilentlyContinue
+  function cat { bat --paging=never @args }
+}

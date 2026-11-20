@@ -3,7 +3,9 @@
 # and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
 param(
   [Parameter(Position = 0)][string]$Command = 'help',
-  [string]$Dir
+  [string]$Dir,
+  [switch]$WithShell,
+  [switch]$NoShell
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,6 +89,15 @@ function Update-Tabi {
   }
 }
 
+function Ask-Extras {
+  # Offer the terminal extras after an install. Flags decide without asking; a piped or redirected run never asks.
+  if ($NoShell) { return $false }
+  if ($WithShell) { return $true }
+  if ([Console]::IsInputRedirected) { return $false }
+  $answer = Read-Host 'Install the terminal extras (Starship prompt, autocompletion, zoxide, fzf, eza, bat, Nerd Font)? [y/N]'
+  return ($answer -match '^(y|yes|s|si|sí)$')
+}
+
 function Show-Status {
   Write-Host "tabi $Version"
   Write-Host "folder: $Target"
@@ -102,12 +113,29 @@ function Install-Shell {
   # shell\profile.ps1 from this repo, so 'tabi update' changes the setup without touching the profile again.
   $loader = Join-Path $Target 'shell\profile.ps1'
   if (-not (Test-Path -LiteralPath $loader)) { Fail "$loader not found: run 'tabi update' first." }
-  foreach ($pkg in @(@('starship', 'Starship.Starship'), @('zoxide', 'ajeetdsouza.zoxide'))) {
-    if (Get-Command $pkg[0] -ErrorAction SilentlyContinue) { continue }
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-      Say "Installing $($pkg[0]) with winget"
+  # The same tools as the macOS zsh setup: prompt, smart cd, fuzzy finder, ls and cat replacements, a Nerd Font
+  # (for other terminals) and PowerShell 7 (inline predictions need PSReadLine 2.2+).
+  $packages = @(
+    @('starship', 'Starship.Starship'), @('zoxide', 'ajeetdsouza.zoxide'), @('fzf', 'junegunn.fzf'),
+    @('eza', 'eza-community.eza'), @('bat', 'sharkdp.bat'), @('pwsh', 'Microsoft.PowerShell'),
+    @($null, 'DEVCOM.JetBrainsMonoNerdFont')
+  )
+  if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+    Say 'winget is not available: install Starship, zoxide, fzf, eza, bat and PowerShell 7 by hand.'
+  } else {
+    foreach ($pkg in $packages) {
+      if ($pkg[0] -and (Get-Command $pkg[0] -ErrorAction SilentlyContinue)) { continue }
+      Say "Installing $($pkg[1]) with winget"
       & winget install --id $pkg[1] -e --accept-package-agreements --accept-source-agreements | Out-Null
-    } else { Say "$($pkg[0]) is missing and winget is not available: install it by hand." }
+      # 0 = installed; -1978335189 = already installed and up to date.
+      if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) { Say "could not install $($pkg[1]) (winget exit $LASTEXITCODE): install it by hand." }
+    }
+  }
+  # PSFzf gives Ctrl+R and Ctrl+T in both PowerShell flavours; each keeps its own modules folder.
+  foreach ($exe in 'powershell', 'pwsh') {
+    if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
+    Say "Checking the PSFzf module for $exe"
+    & $exe -NoProfile -Command "if (-not (Get-Module -ListAvailable -Name PSFzf)) { try { Install-Module PSFzf -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop } catch { Write-Host ('could not install PSFzf: ' + `$_.Exception.Message) } }"
   }
   $quoted = $loader.Replace("'", "''")
   $block = "# >>> tabi shell >>>`r`nif (Test-Path -LiteralPath '$quoted') { . '$quoted' }`r`n# <<< tabi shell <<<"
@@ -123,20 +151,21 @@ function Install-Shell {
     Set-Content -LiteralPath $file -Value $text -Encoding UTF8
     Say "Profile updated: $file"
   }
-  Say 'Open a new terminal. For the branch symbol, pick a Nerd Font in your terminal.'
+  Say 'Open a new terminal. Herdr already uses JetBrains Mono; in other terminals pick "JetBrainsMono Nerd Font" for the branch symbol.'
 }
 
 function Show-Usage {
   @"
-tabi $Version: install and update the tabi layout for Herdr
+tabi ${Version}: install and update the tabi layout for Herdr
 
-Usage: tabi <command> [-Dir <folder>]
+Usage: tabi <command> [-Dir <folder>] [-WithShell | -NoShell]
 
 Commands:
-  install   Set up tabi in the Herdr config folder (updates it if already installed)
+  install   Set up tabi in the Herdr config folder (updates it if already installed), then offer the
+            terminal extras; -WithShell accepts them without asking, -NoShell skips the question
   update    Pull the latest version (fast-forward only; refuses if you have local edits)
   status    Show the folder, the installed version and what is missing
-  shell     Set up the Starship prompt and inline autocompletion in your PowerShell profiles
+  shell     Install the terminal extras (Starship, zoxide, fzf, eza, bat, Nerd Font) and wire your PowerShell profiles
   version   Print the tool version
 
 The folder defaults to `$env:HERDR_APP_HOME, else the first of ~\.config\herdr-app, %APPDATA%\herdr-app
@@ -145,7 +174,7 @@ and %LOCALAPPDATA%\herdr-app that exists.
 }
 
 switch ($Command) {
-  'install' { $script:Target = Find-Folder; Install-Tabi }
+  'install' { $script:Target = Find-Folder; Install-Tabi; if (Ask-Extras) { Install-Shell } }
   'update'  { $script:Target = Find-Folder; Update-Tabi }
   'status'  { $script:Target = Find-Folder; Show-Status }
   'shell'   { $script:Target = Find-Folder; Install-Shell }
