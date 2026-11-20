@@ -7,6 +7,17 @@ export function statusInfo(status) {
   return { kanji: "済", accent: "idle", label: status === "done" ? "terminó" : "en reposo", busy: false };
 }
 
+/** The character of a portrait: its file name without the image extension ("Mai.jpg" -> "Mai"); null when there is none. */
+export function characterName(file) {
+  const name = String(file ?? "").replace(/\.(png|jpe?g)$/i, "").trim();
+  return name || null;
+}
+
+/** What a card calls its agent: the character of its portrait, or the account (claude, claude2, codex) without one. */
+export function cardName(file, account) {
+  return characterName(file) ?? account;
+}
+
 /** The portrait names to look for, most specific first: ~/Documents/retratos/<name>.png. */
 export function portraitNames(agent) {
   const names = [agent.program?.key, agent.app, agent.program?.name]
