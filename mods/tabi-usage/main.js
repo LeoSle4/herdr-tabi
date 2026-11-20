@@ -25,7 +25,7 @@ const cacheFile = () => `${appHome()}/data/tabi/usage.json`;
 
 // Module scope is shared by every copy of this mod, which is what "once per Herdr session" needs.
 const creds = new Map(); // account name -> promise of its login
-const rereadFor = new Map(); // account name -> expiry of the login already re-read after it expired (see canReread)
+const rereadFor = new Map(); // account name -> { expiresAt, at } of the last re-read after an expiry (see canReread)
 const hashes = new Map(); // config dir -> first 8 hex digits of its SHA-256 (the Keychain service suffix)
 let accounts = null; // [{ name, dir, default }], found by scanAccounts
 let cache = null; // { claude: entry, claude2: entry, codex: entry }, loaded once from disk
@@ -94,8 +94,8 @@ async function credential(acc) {
 
 /** After an expiry or a 401: read the Keychain again, once for this login. Returns the new (or the same) login. */
 async function reread(acc, old) {
-  if (!canReread(old, rereadFor.get(acc.name))) return old;
-  rereadFor.set(acc.name, String(old.expiresAt));
+  if (!canReread(old, rereadFor.get(acc.name), Date.now())) return old;
+  rereadFor.set(acc.name, { expiresAt: String(old.expiresAt), at: Date.now() });
   const p = loadCredential(acc);
   creds.set(acc.name, p);
   return p;

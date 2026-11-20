@@ -28,15 +28,17 @@ test("keychain exit codes: 0 ok, 44 no login, anything else (cancelled, locked) 
   assert.equal(keychainOutcome(51), "denied");
 });
 
-test("an expired login is re-read once, and the same login is never re-read twice", () => {
+test("an expired login is re-read when renewed, or at most once per interval", () => {
   const old = { state: "ok", token: "t", expiresAt: 100 };
-  assert.equal(canReread(old, null), true);
-  assert.equal(canReread(old, "100"), false); // already re-read for this login
-  assert.equal(canReread({ ...old, expiresAt: 200 }, "100"), true); // Claude Code renewed it: a new login
-  assert.equal(canReread({ ...old, expiresAt: null }, null), true);
-  assert.equal(canReread({ ...old, expiresAt: null }, "null"), false);
-  assert.equal(canReread({ state: "denied" }, null), false); // a refusal is never asked again
-  assert.equal(canReread({ state: "nologin" }, null), false);
+  const last = { expiresAt: "100", at: 1000 };
+  assert.equal(canReread(old, undefined, 1000), true);
+  assert.equal(canReread(old, last, 1000 + MIN_INTERVAL_MS - 1), false); // same login, too soon
+  assert.equal(canReread(old, last, 1000 + MIN_INTERVAL_MS), true); // same login, interval passed: look again
+  assert.equal(canReread({ ...old, expiresAt: 200 }, last, 1001), true); // Claude Code renewed it
+  assert.equal(canReread({ ...old, expiresAt: null }, undefined, 1000), true);
+  assert.equal(canReread({ ...old, expiresAt: null }, { expiresAt: "null", at: 1000 }, 1001), false);
+  assert.equal(canReread({ state: "denied" }, undefined, 1000), false); // a refusal is never asked again
+  assert.equal(canReread({ state: "nologin" }, undefined, 1000), false);
 });
 
 test("expiry", () => {
