@@ -165,6 +165,44 @@ if "%2"=="--status" echo Sync status:
   $env:TABI_MEMORY_TRUST = $null
   $r = Run memory push
   Check 'memory: refuses when privacy cannot be confirmed' ($r.Code -ne 0)
+
+  # 10. net-watch, against a stub tailscale (a .cmd) whose status is fixed by a file.
+  $nw = Join-Path $root 'nw'
+  New-Item -ItemType Directory -Path (Join-Path $nw 'dir') | Out-Null
+  $nwLog = Join-Path $nw 'ts.log'
+  [IO.File]::WriteAllText((Join-Path $nw 'tailscale.cmd'), @'
+@echo off
+echo %*>> "%NW_LOG%"
+if "%1"=="status" (
+  if exist "%NW_HEALTHY%" (echo {"BackendState":"Running","Self":{"Online":true}}) else (echo {"BackendState":"Running","Self":{"Online":false}})
+)
+exit /b 0
+'@)
+  $env:NW_LOG = $nwLog
+  $env:NW_HEALTHY = Join-Path $nw 'healthy'
+  $env:TABI_TAILSCALE = Join-Path $nw 'tailscale.cmd'
+  $env:TABI_NETWATCH_WAIT = '0'
+  $nwDir = Join-Path $nw 'dir'
+  $nwState = Join-Path $nwDir 'data\tabi\net-watch.json'
+  Set-Content -LiteralPath $env:NW_HEALTHY -Value 'x'
+  $r = Run net-watch run -Dir $nwDir
+  Check 'net-watch: healthy does nothing' ($r.Code -eq 0 -and -not (Test-Path -LiteralPath $nwState) -and -not ((Test-Path -LiteralPath $nwLog) -and (Select-String -Path $nwLog -Pattern '^down' -Quiet)))
+  Remove-Item -LiteralPath $env:NW_HEALTHY -Force
+  1..3 | ForEach-Object { $r = Run net-watch run -Dir $nwDir }
+  Check 'net-watch: three repairs, each a down and an up' ((@(Select-String -Path $nwLog -Pattern '^down')).Count -eq 3 -and (@(Select-String -Path $nwLog -Pattern '^up --timeout=20s')).Count -eq 3)
+  $r = Run net-watch run -Dir $nwDir
+  Check 'net-watch: then it stops repairing and records the alert' ((@(Select-String -Path $nwLog -Pattern '^down')).Count -eq 3 -and $r.Out -match 'sending the alert' -and (Get-Content -LiteralPath $nwState -Raw) -match '"alerted":true')
+  Set-Content -LiteralPath $env:NW_HEALTHY -Value 'x'
+  $r = Run net-watch run -Dir $nwDir
+  Check 'net-watch: recovery clears the state' ($r.Out -match 'back' -and -not (Test-Path -LiteralPath $nwState))
+  $env:TABI_TAILSCALE = Join-Path $nw 'missing.cmd'
+  $r = Run net-watch run -Dir $nwDir
+  Check 'net-watch: without tailscale it says so and succeeds' ($r.Code -eq 0 -and $r.Out -match 'not installed')
+  $r = Run net-watch nonsense -Dir $nwDir
+  Check 'net-watch: unknown subcommand fails' ($r.Code -ne 0)
+  $r = Run help
+  Check 'help: lists net-watch' ($r.Out -match 'net-watch')
+  Remove-Item Env:TABI_TAILSCALE, Env:TABI_NETWATCH_WAIT, Env:NW_LOG, Env:NW_HEALTHY -ErrorAction SilentlyContinue
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

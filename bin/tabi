@@ -4,7 +4,7 @@
 # and updating is a fast-forward pull. Nothing outside tracked files is ever touched.
 set -eu
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 REPO="${TABI_REPO:-https://github.com/LeoSle4/herdr-tabi.git}"
 BRANCH="${TABI_BRANCH:-main}"
 
@@ -194,6 +194,155 @@ cmd_memory() {
   esac
 }
 
+# net-watch: keeps Tailscale (and so the link between your machines and the phone) up.
+# `run` is one check: healthy -> nothing; offline -> up to 3 repairs (down/up), one per run; still offline -> one ntfy alert.
+NW_LABEL="dev.tabi.net-watch"
+NW_MAX_REPAIRS=3
+
+nw_tailscale() {
+  if [ -n "${TABI_TAILSCALE+x}" ]; then
+    if [ -x "$TABI_TAILSCALE" ]; then printf '%s\n' "$TABI_TAILSCALE"; return; fi
+    return 1
+  fi
+  for c in "$(command -v tailscale 2>/dev/null || true)" /usr/local/bin/tailscale /opt/homebrew/bin/tailscale \
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale; do
+    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s\n' "$c"; return; fi
+  done
+  return 1
+}
+
+nw_healthy() {
+  out=$("$1" status --json 2>/dev/null) || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$out" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+sys.exit(0 if d.get("BackendState")=="Running" and (d.get("Self") or {}).get("Online") else 1)' 2>/dev/null
+  else
+    printf '%s' "$out" | grep -q '"BackendState": *"Running"'
+  fi
+}
+
+# Reads the ntfy settings of the notification file (the same one the agents' alerts use) and sends one message.
+nw_alert() {
+  cfg="$1/data/tabi/notify.json"
+  [ -f "$cfg" ] && command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 || return 0
+  set -- "$cfg" "$(hostname -s 2>/dev/null || echo this-machine)"
+  fields=$(python3 - "$@" <<'PY' 2>/dev/null || true
+import json, re, sys
+c = json.load(open(sys.argv[1]))
+t, s = c.get("topic", ""), c.get("server", "https://ntfy.sh")
+if not (isinstance(t, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,64}", t) and isinstance(s, str) and s.startswith("https://")):
+    sys.exit(0)
+body = "Tailscale is offline and the automatic repair did not work"
+if c.get("details") is True:
+    body += " on " + sys.argv[2]
+print(s.rstrip("/") + "/" + t)
+print(body)
+PY
+)
+  [ -n "$fields" ] || return 0
+  url=$(printf '%s\n' "$fields" | sed -n 1p)
+  body=$(printf '%s\n' "$fields" | sed -n 2p)
+  curl -fsS -m 10 -H "Title: tabi net-watch" -H "Priority: 4" -d "$body" "$url" >/dev/null 2>&1 || true
+}
+
+# Machines that lost their link while Tailscale was down get reconnected now instead of at their next retry.
+nw_reconnect() {
+  command -v hc >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 0
+  hc machine ls 2>/dev/null | python3 -c 'import json,sys
+for m in json.load(sys.stdin).get("machines", []):
+    if m.get("state") != "connected": print(m.get("name", ""))' 2>/dev/null | while read -r name; do
+    [ -n "$name" ] && hc machine login "$name" >/dev/null 2>&1 || true
+  done
+}
+
+# 'tailscale up' refuses to run when your settings differ from the defaults (for example --accept-routes) and prints the
+# command that keeps them; run exactly that one so a repair never changes your settings.
+nw_up() {
+  upout=$("$1" up --timeout=20s 2>&1) && return 0
+  suggested=$(printf '%s\n' "$upout" | sed -n 's/^[[:space:]]*tailscale up //p' | tail -n 1)
+  [ -n "$suggested" ] || return 1
+  # shellcheck disable=SC2086
+  "$1" up $suggested >/dev/null 2>&1
+}
+
+nw_run() {
+  dir=$1
+  ts=$(nw_tailscale) || { say "net-watch: tailscale is not installed, nothing to watch"; return 0; }
+  state="$dir/data/tabi/net-watch.state"
+  if nw_healthy "$ts"; then
+    if [ -f "$state" ]; then rm -f "$state"; say "net-watch: Tailscale is back"; nw_reconnect; fi
+    return 0
+  fi
+  mkdir -p "$dir/data/tabi"
+  attempts=0; alerted=0
+  [ -f "$state" ] && { read -r attempts alerted < "$state" || true; }
+  case $attempts in '' | *[!0-9]*) attempts=0 ;; esac
+  case $alerted in '' | *[!0-9]*) alerted=0 ;; esac
+  if [ "$attempts" -lt "$NW_MAX_REPAIRS" ]; then
+    attempts=$((attempts + 1))
+    printf '%s %s\n' "$attempts" "$alerted" > "$state"
+    say "net-watch: Tailscale is offline, repair $attempts of $NW_MAX_REPAIRS"
+    "$ts" down >/dev/null 2>&1 || true
+    sleep "${TABI_NETWATCH_WAIT:-3}"
+    nw_up "$ts" || say "net-watch: 'tailscale up' failed (run it by hand to see why)"
+    sleep "${TABI_NETWATCH_WAIT:-3}"
+    if nw_healthy "$ts"; then rm -f "$state"; say "net-watch: Tailscale is back"; nw_reconnect; fi
+    return 0
+  fi
+  if [ "$alerted" -eq 0 ]; then
+    printf '%s 1\n' "$attempts" > "$state"
+    say "net-watch: still offline after $NW_MAX_REPAIRS repairs, sending the alert"
+    nw_alert "$dir"
+  fi
+}
+
+nw_plist() { printf '%s\n' "$HOME/Library/LaunchAgents/$NW_LABEL.plist"; }
+
+nw_install() {
+  dir=$1
+  [ "$(uname -s)" = Darwin ] || die "net-watch install uses launchd (macOS); on Linux run 'tabi net-watch run' from cron or a systemd timer every 5 minutes"
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  mkdir -p "$dir/data/tabi" "$HOME/Library/LaunchAgents"
+  cat > "$(nw_plist)" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$NW_LABEL</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/sh</string><string>$self</string><string>net-watch</string><string>run</string><string>--dir</string><string>$dir</string>
+  </array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$dir/data/tabi/net-watch.log</string>
+  <key>StandardErrorPath</key><string>$dir/data/tabi/net-watch.log</string>
+</dict></plist>
+EOF
+  if [ -z "${TABI_NETWATCH_NOLOAD:-}" ]; then
+    launchctl bootout "gui/$(id -u)/$NW_LABEL" >/dev/null 2>&1 || true
+    launchctl bootstrap "gui/$(id -u)" "$(nw_plist)" || die "launchctl could not load $(nw_plist)"
+  fi
+  say "net-watch installed: it checks Tailscale every 5 minutes (log: $dir/data/tabi/net-watch.log)"
+}
+
+nw_remove() {
+  if [ -z "${TABI_NETWATCH_NOLOAD:-}" ] && [ "$(uname -s)" = Darwin ]; then
+    launchctl bootout "gui/$(id -u)/$NW_LABEL" >/dev/null 2>&1 || true
+  fi
+  rm -f "$(nw_plist)"
+  say "net-watch removed"
+}
+
+cmd_netwatch() {
+  case $1 in
+    run | '') nw_run "$2" ;;
+    install) nw_install "$2" ;;
+    remove) nw_remove ;;
+    *) die "usage: tabi net-watch [run | install | remove]" ;;
+  esac
+}
+
 cmd_status() {
   dir=$1
   printf 'tabi %s\nfolder: %s\n' "$VERSION" "$dir"
@@ -217,6 +366,8 @@ Commands:
             ~/.zshrc or ~/.bashrc; --no-install only wires the file
   memory    Share Engram memories between machines through a private git repository:
             push | pull | status (the repository is ~/engram-memory, or \$TABI_MEMORY_DIR)
+  net-watch Keep Tailscale up so your machines and phone stay connected: run (one check), install
+            (every 5 minutes, macOS launchd), remove. Offline -> 3 automatic repairs, then one ntfy alert
   status    Show the folder, the installed version and what is missing
   version   Print the tool version
 
@@ -227,7 +378,7 @@ EOF
 command=${1:-help}
 [ $# -gt 0 ] && shift
 sub=""
-if [ "$command" = memory ] && [ $# -gt 0 ]; then
+if { [ "$command" = memory ] || [ "$command" = net-watch ]; } && [ $# -gt 0 ]; then
   case $1 in -*) ;; *) sub=$1; shift ;; esac
 fi
 dir=$(default_dir)
@@ -248,6 +399,7 @@ case $command in
   install) cmd_install "$dir"; if ask_extras; then cmd_shell "$dir"; fi ;;
   shell) cmd_shell "$dir" ;;
   memory) cmd_memory "$sub" ;;
+  net-watch) cmd_netwatch "$sub" "$dir" ;;
   update) cmd_update "$dir" ;;
   status) cmd_status "$dir" ;;
   version|--version|-v) echo "tabi $VERSION" ;;

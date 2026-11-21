@@ -128,5 +128,62 @@ check "memory: refuses the public tabi repository" '! mem "$ROOT/pub" push >/dev
 check "memory: refuses a folder that is not a checkout" '! mem "$ROOT/empty" push >/dev/null 2>&1'
 check "memory: refuses when privacy cannot be confirmed" '! PATH="$MB:$PATH" TABI_MEMORY_DIR="$ROOT/m1" sh "$TABI" memory push >/dev/null 2>&1'
 
+# net-watch: a stub tailscale whose health is a file, and a stub curl that records the alert.
+NW="$ROOT/nw"; mkdir -p "$NW/bin" "$NW/dir/data/tabi"
+cat > "$NW/bin/tailscale" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$NW_LOG"
+case $1 in
+  status) if [ -f "$NW_HEALTHY" ]; then echo '{"BackendState":"Running","Self":{"Online":true}}'; else echo '{"BackendState":"Running","Self":{"Online":false}}'; fi ;;
+  up) if [ -f "$NW_NEEDS_FLAG" ] && [ "$*" != "up --timeout=20s --accept-routes" ]; then
+        printf 'Error: changing settings via '"'"'tailscale up'"'"' requires mentioning all\nnon-default flags. To proceed, specify:\n\n\ttailscale up --timeout=20s --accept-routes\n' >&2; exit 1
+      fi
+      [ -f "$NW_FIXES" ] && touch "$NW_HEALTHY" ;;
+esac
+exit 0
+STUB
+cat > "$NW/bin/curl" <<'STUB'
+#!/bin/sh
+echo "$*" >> "$NW_CURL"
+STUB
+chmod +x "$NW/bin/tailscale" "$NW/bin/curl"
+export NW_LOG="$NW/ts.log" NW_HEALTHY="$NW/healthy" NW_FIXES="$NW/fixes" NW_CURL="$NW/curl.log" NW_NEEDS_FLAG="$NW/needsflag" TABI_NETWATCH_WAIT=0
+nwrun() { PATH="$NW/bin:$PATH" TABI_TAILSCALE="$NW/bin/tailscale" sh "$TABI" net-watch run --dir "$NW/dir"; }
+printf '{"topic":"tabi-test-topic","server":"https://ntfy.example"}\n' > "$NW/dir/data/tabi/notify.json"
+
+touch "$NW_HEALTHY"; : > "$NW_LOG"
+nwrun >/dev/null
+check "net-watch: healthy does nothing" '! grep -qE "^(down|up)" "$NW_LOG" && [ ! -f "$NW/dir/data/tabi/net-watch.state" ]'
+
+rm -f "$NW_HEALTHY"; touch "$NW_FIXES"; : > "$NW_LOG"
+nwrun | grep -q "back"
+check "net-watch: offline is repaired with down and up" 'grep -q "^down" "$NW_LOG" && grep -q "^up --timeout" "$NW_LOG" && [ ! -f "$NW/dir/data/tabi/net-watch.state" ] && [ ! -f "$NW_CURL" ]'
+
+rm -f "$NW_HEALTHY"; touch "$NW_FIXES" "$NW_NEEDS_FLAG"; : > "$NW_LOG"
+nwrun | grep -q "back"
+check "net-watch: a tailscale that wants its non-default flags gets exactly those" 'grep -q "^up --timeout=20s --accept-routes" "$NW_LOG" && [ -f "$NW_HEALTHY" ]'
+rm -f "$NW_NEEDS_FLAG"
+
+rm -f "$NW_HEALTHY" "$NW_FIXES" "$NW_CURL"; : > "$NW_LOG"
+nwrun >/dev/null; nwrun >/dev/null; nwrun >/dev/null
+check "net-watch: three failed repairs, no alert yet" '[ "$(grep -c "^down" "$NW_LOG")" -eq 3 ] && [ ! -f "$NW_CURL" ]'
+nwrun >/dev/null; nwrun >/dev/null
+check "net-watch: then exactly one ntfy alert and no more repairs" '[ "$(grep -c "^down" "$NW_LOG")" -eq 3 ] && [ "$(wc -l < "$NW_CURL")" -eq 1 ] && grep -q "https://ntfy.example/tabi-test-topic" "$NW_CURL"'
+check "net-watch: the alert does not carry the hostname without details" '! grep -qi "$(hostname -s)" "$NW_CURL"'
+
+touch "$NW_HEALTHY"
+nwrun | grep -q "back"
+check "net-watch: recovery clears the state" '[ ! -f "$NW/dir/data/tabi/net-watch.state" ]'
+
+check "net-watch: without tailscale it says so and succeeds" 'TABI_TAILSCALE="$NW/missing" sh "$TABI" net-watch run --dir "$NW/dir" >/dev/null 2>&1'
+check "net-watch: unknown subcommand fails" '! sh "$TABI" net-watch nonsense >/dev/null 2>&1'
+check "net-watch: help lists it" 'sh "$TABI" help | grep -q "net-watch"'
+if [ "$(uname -s)" = Darwin ]; then
+  HOME="$NW/home" TABI_NETWATCH_NOLOAD=1 sh "$TABI" net-watch install --dir "$NW/dir" >/dev/null
+  check "net-watch: install writes a valid launchd plist" 'plutil -lint "$NW/home/Library/LaunchAgents/dev.tabi.net-watch.plist" >/dev/null && grep -q "<integer>300</integer>" "$NW/home/Library/LaunchAgents/dev.tabi.net-watch.plist"'
+  HOME="$NW/home" TABI_NETWATCH_NOLOAD=1 sh "$TABI" net-watch remove >/dev/null
+  check "net-watch: remove deletes it" '[ ! -f "$NW/home/Library/LaunchAgents/dev.tabi.net-watch.plist" ]'
+fi
+
 if [ "$FAILS" -ne 0 ]; then printf '\n%s test(s) failed\n' "$FAILS"; exit 1; fi
 printf '\nall passed\n'

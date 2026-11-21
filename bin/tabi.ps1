@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Version = '0.3.0'
+$Version = '0.4.0'
 $Repo = if ($env:TABI_REPO) { $env:TABI_REPO } else { 'https://github.com/LeoSle4/herdr-tabi.git' }
 $Branch = if ($env:TABI_BRANCH) { $env:TABI_BRANCH } else { 'main' }
 
@@ -231,6 +231,128 @@ function Invoke-Memory([string]$sub) {
   }
 }
 
+# net-watch: keeps Tailscale (and so the link between your machines and the phone) up.
+# 'run' is one check: healthy -> nothing; offline -> up to 3 repairs (down/up), one per run; still offline -> one ntfy alert.
+$NwTask = 'tabi net-watch'
+$NwMaxRepairs = 3
+
+function Find-Tailscale {
+  if ($null -ne $env:TABI_TAILSCALE) {
+    if ($env:TABI_TAILSCALE -and (Test-Path -LiteralPath $env:TABI_TAILSCALE)) { return $env:TABI_TAILSCALE }
+    return $null
+  }
+  $cmd = Get-Command tailscale -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  $p = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
+  if (Test-Path -LiteralPath $p) { return $p }
+  return $null
+}
+
+function Test-TailscaleHealthy([string]$ts) {
+  $ErrorActionPreference = 'Continue'
+  try {
+    $raw = & $ts status --json 2>$null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    $d = ($raw | Out-String) | ConvertFrom-Json
+    return ($d.BackendState -eq 'Running' -and $d.Self.Online -eq $true)
+  } catch { return $false }
+}
+
+# 'tailscale up' refuses to run when your settings differ from the defaults (for example --accept-routes) and prints the
+# command that keeps them; run exactly that one so a repair never changes your settings.
+function Invoke-TailscaleUp([string]$ts) {
+  $ErrorActionPreference = 'Continue'
+  $out = & $ts up --timeout=20s 2>&1 | Out-String
+  if ($LASTEXITCODE -eq 0) { return $true }
+  $m = [regex]::Match($out, '(?m)^\s*tailscale up (.+?)\s*$')
+  if (-not $m.Success) { return $false }
+  & $ts up @($m.Groups[1].Value -split '\s+') *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Send-NetWatchAlert([string]$folder) {
+  $cfgPath = Join-Path $folder 'data\tabi\notify.json'
+  if (-not (Test-Path -LiteralPath $cfgPath)) { return }
+  try { $c = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json } catch { return }
+  $topic = [string]$c.topic
+  $server = if ($c.server) { [string]$c.server } else { 'https://ntfy.sh' }
+  if ($topic -notmatch '^[A-Za-z0-9_-]{8,64}$' -or $server -notlike 'https://*') { return }
+  $body = 'Tailscale is offline and the automatic repair did not work'
+  if ($c.details -eq $true) { $body += " on $env:COMPUTERNAME" }
+  $ErrorActionPreference = 'Continue'
+  & curl.exe -fsS -m 10 -H 'Title: tabi net-watch' -H 'Priority: 4' -d $body "$($server.TrimEnd('/'))/$topic" *> $null
+}
+
+# Machines that lost their link while Tailscale was down get reconnected now instead of at their next retry.
+function Restore-HerdrMachines {
+  if (-not (Get-Command hc -ErrorAction SilentlyContinue)) { return }
+  $ErrorActionPreference = 'Continue'
+  try {
+    $list = (& hc machine ls 2>$null | Out-String) | ConvertFrom-Json
+    foreach ($m in $list.machines) { if ($m.state -ne 'connected' -and $m.name) { & hc machine login $m.name *> $null } }
+  } catch { }
+}
+
+function Invoke-NetWatchRun([string]$folder) {
+  $ts = Find-Tailscale
+  if (-not $ts) { Say 'net-watch: tailscale is not installed, nothing to watch'; return }
+  $stateFile = Join-Path $folder 'data\tabi\net-watch.json'
+  if (Test-TailscaleHealthy $ts) {
+    if (Test-Path -LiteralPath $stateFile) { Remove-Item -LiteralPath $stateFile -Force; Say 'net-watch: Tailscale is back'; Restore-HerdrMachines }
+    return
+  }
+  New-Item -ItemType Directory -Force -Path (Split-Path $stateFile) | Out-Null
+  $attempts = 0; $alerted = $false
+  if (Test-Path -LiteralPath $stateFile) {
+    try { $st = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json; $attempts = [int]$st.attempts; $alerted = [bool]$st.alerted } catch { }
+  }
+  $wait = if ($env:TABI_NETWATCH_WAIT) { [int]$env:TABI_NETWATCH_WAIT } else { 3 }
+  if ($attempts -lt $NwMaxRepairs) {
+    $attempts++
+    (@{ attempts = $attempts; alerted = $alerted } | ConvertTo-Json -Compress) | Set-Content -LiteralPath $stateFile
+    Say "net-watch: Tailscale is offline, repair $attempts of $NwMaxRepairs"
+    $ErrorActionPreference = 'Continue'
+    & $ts down *> $null
+    Start-Sleep -Seconds $wait
+    if (-not (Invoke-TailscaleUp $ts)) { Say "net-watch: 'tailscale up' failed (run it by hand to see why)" }
+    Start-Sleep -Seconds $wait
+    if (Test-TailscaleHealthy $ts) { Remove-Item -LiteralPath $stateFile -Force; Say 'net-watch: Tailscale is back'; Restore-HerdrMachines }
+    return
+  }
+  if (-not $alerted) {
+    (@{ attempts = $attempts; alerted = $true } | ConvertTo-Json -Compress) | Set-Content -LiteralPath $stateFile
+    Say "net-watch: still offline after $NwMaxRepairs repairs, sending the alert"
+    Send-NetWatchAlert $folder
+  }
+}
+
+function Install-NetWatch([string]$folder) {
+  $self = $PSCommandPath
+  $exe = (Get-Process -Id $PID).Path
+  $argLine = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$self`" net-watch run -Dir `"$folder`""
+  $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
+  $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+  $user = "$env:USERDOMAIN\$env:USERNAME"
+  $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -MultipleInstances IgnoreNew
+  Register-ScheduledTask -TaskName $NwTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+  Say 'net-watch installed: it checks Tailscale every 5 minutes (Task Scheduler: "tabi net-watch")'
+}
+
+function Remove-NetWatch {
+  if (Get-ScheduledTask -TaskName $NwTask -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $NwTask -Confirm:$false }
+  Say 'net-watch removed'
+}
+
+function Invoke-NetWatch([string]$sub, [string]$folder) {
+  switch ($sub) {
+    { $_ -in '', 'run' } { Invoke-NetWatchRun $folder }
+    'install' { Install-NetWatch $folder }
+    'remove' { Remove-NetWatch }
+    default { Fail 'usage: tabi net-watch [run | install | remove]' }
+  }
+}
+
 function Show-Usage {
   @"
 tabi ${Version}: install and update the tabi layout for Herdr
@@ -245,6 +367,8 @@ Commands:
   shell     Install the terminal extras (Starship, zoxide, fzf, eza, bat, Nerd Font) and wire your PowerShell profiles
   memory    Share Engram memories between machines through a private git repository:
             push | pull | status (the repository is ~\engram-memory, or $env:TABI_MEMORY_DIR)
+  net-watch Keep Tailscale up so your machines and phone stay connected: run (one check), install
+            (every 5 minutes, Task Scheduler), remove. Offline -> 3 automatic repairs, then one ntfy alert
   version   Print the tool version
 
 The folder defaults to `$env:HERDR_APP_HOME, else the first of ~\.config\herdr-app, %APPDATA%\herdr-app
@@ -258,6 +382,7 @@ switch ($Command) {
   'status'  { $script:Target = Find-Folder; Show-Status }
   'shell'   { $script:Target = Find-Folder; Install-Shell }
   'memory'  { Invoke-Memory $Sub }
+  'net-watch' { $script:Target = Find-Folder; Invoke-NetWatch $Sub $script:Target }
   { $_ -in 'version', '--version', '-v' } { Write-Host "tabi $Version" }
   { $_ -in 'help', '--help', '-h' } { Show-Usage }
   default { Show-Usage; exit 1 }
