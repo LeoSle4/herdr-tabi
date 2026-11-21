@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { slashCommand, canSwitch, switchSession, familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
+import { agentChoices, tabName, taskId, newTaskRecord, handoffPrompt, handoffLaunch, slashCommand, canSwitch, switchSession, familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
 
 const cache = JSON.stringify({
   models: [
@@ -192,4 +192,59 @@ test("switchSession: refuses a platform it has no clipboard tools for, and a tex
   assert.equal((await switchSession(f.deps, { pane: "p9", text: "rm -rf ~", platform: "macos" })).ok, false);
   assert.equal((await switchSession(f.deps, { pane: "p9", text: "/model sonnet\n/effort high", platform: "macos" })).ok, false);
   assert.deepEqual(f.log, []);
+});
+
+const rec = (extra = {}) => ({ id: "a", task: "arregla el login", agent: "Claude Code", agentKey: "claude", character: "Koyun", tab: "Koyun", branch: null, folder: "/p/repo", machine: null, startedAt: 1000, status: "done", finishedAt: 2000, result: "Dejé el formulario a medias.", verify: "node --test", check: null, ...extra });
+const codex = { key: "codex", name: "Codex", argv: ["codex"] };
+
+test("handoffPrompt: the task, what the last agent said, and what to do first, in one line", () => {
+  const p = handoffPrompt({ task: "arregla el login", result: "Dejé el formulario a medias.", from: "Koyun" });
+  assert.match(p, /^Continúa esta tarea/);
+  assert.match(p, /Koyun/);
+  assert.match(p, /arregla el login/);
+  assert.match(p, /Dejé el formulario a medias\./);
+  assert.match(p, /git status/);
+  assert.equal(p.includes("\n"), false);
+});
+
+test("handoffPrompt: without a result it does not mention one, a long one is cut, and newlines are squeezed", () => {
+  assert.doesNotMatch(handoffPrompt({ task: "x", result: null, from: "Koyun" }), /Lo último que dijo/);
+  assert.ok(handoffPrompt({ task: "x", result: "r".repeat(2000), from: "Koyun" }).length < 900);
+  const multi = handoffPrompt({ task: "uno\ndos\n\ntres", result: "a\nb", from: "K" });
+  assert.equal(multi.includes("\n"), false);
+  assert.match(multi, /uno dos tres/);
+  assert.match(handoffPrompt({ task: "x", result: null, from: undefined }), /otro agente/);
+});
+
+test("handoffLaunch: a tab in the same space and folder with the new agent, its flags and the message; and the record that goes with it", () => {
+  const prefs = { codex: { model: "gpt-6-luna", effort: "high" } };
+  const r = handoffLaunch({ rec: rec(), from: "Koyun", agent: codex, space: "spA", folder: "/p/repo", prefs, now: 9000, rnd: "ab12" });
+  assert.equal(r.command, "tab.new");
+  assert.deepEqual(r.args.argv, ["codex", "-m", "gpt-6-luna", "-c", "model_reasoning_effort=high"]);
+  assert.deepEqual([r.args.name, r.args.space, r.args.folder], ["Codex", "spA", "/p/repo"]);
+  assert.equal(r.args.task, handoffPrompt({ task: "arregla el login", result: "Dejé el formulario a medias.", from: "Koyun" }));
+  assert.equal(r.record.task, "→ arregla el login");
+  assert.deepEqual([r.record.tab, r.record.agent, r.record.verify, r.record.folder, r.record.branch, r.record.machine, r.record.startedAt], ["Codex", "Codex", "node --test", "/p/repo", null, null, 9000]);
+  assert.equal(r.record.status, "running");
+  assert.equal(r.record.id, taskId(9000, "ab12"));
+});
+
+test("handoffLaunch: a worktree task goes on in the same branch, and there is nothing to launch without a task or an agent", () => {
+  const r = handoffLaunch({ rec: rec({ branch: "tabi/koyun-arregla" }), from: "Koyun", agent: codex, space: "spW", folder: "/w/repo/koyun", prefs: {}, now: 1, rnd: "0000" });
+  assert.equal(r.record.branch, "tabi/koyun-arregla");
+  assert.deepEqual(r.args.argv, ["codex"]);
+  assert.equal(handoffLaunch({ rec: null, from: "K", agent: codex, space: "s", folder: "/f", prefs: {}, now: 1 }), null);
+  assert.equal(handoffLaunch({ rec: rec(), from: "K", agent: null, space: "s", folder: "/f", prefs: {}, now: 1 }), null);
+});
+
+test("the copies of tabi-task (agentChoices, tabName, taskId, newTaskRecord) behave like the original", () => {
+  const known = [{ key: "claude", name: "Claude Code", run: ["claude"], installed: true }, { key: "codex", name: "Codex", run: ["codex"], installed: true }, { key: "gemini", name: "G", run: ["g"], installed: false }];
+  const accounts = [{ name: "claude2", bin: "/b/claude2", default: false }, { name: "claude", default: true }];
+  assert.deepEqual(agentChoices(known, accounts), task.agentChoices(known, accounts));
+  assert.deepEqual(agentChoices(undefined, undefined), task.agentChoices(undefined, undefined));
+  assert.equal(tabName({ name: "Koyun" }, codex), task.tabName({ name: "Koyun" }, codex));
+  assert.equal(taskId(123456789, "AB-12"), task.taskId(123456789, "AB-12"));
+  const a = { task: " x ", agent: codex, character: null, branch: "b", folder: "/f", machine: null, now: 5, rnd: "0001", verify: " node --test " };
+  assert.deepEqual(newTaskRecord(a), task.newTaskRecord(a));
+  assert.equal(newTaskRecord({ ...a, task: "  " }), task.newTaskRecord({ ...a, task: "  " }));
 });
