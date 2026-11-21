@@ -49,6 +49,7 @@ edited a tracked file or are on another branch. If you installed the command wit
 | `tabi update` | Pulls the latest version. |
 | `tabi shell` | Installs the terminal extras and wires your shell (see below). |
 | `tabi memory` | `push`, `pull` or `status`: shares your Engram memories between machines (see below). |
+| `tabi net-watch` | `run`, `install` or `remove`: keeps Tailscale up so the machines and the phone stay connected (see below). |
 | `tabi status` | Shows the folder, the installed version and anything missing (git, Python). |
 | `tabi version` | Prints the tool version. |
 
@@ -121,6 +122,30 @@ Memories hold everything you told your agents, so it is careful on purpose:
 - It never exports prompts. Do not add `--include-prompts` yourself. `/.engram/` is ignored in this repository, so running
   `engram sync` inside it cannot publish anything.
 - It is not live: pull before you start working and push when you finish. Use the same Engram version on every machine.
+
+## Keeping the connection up
+
+The Mac, the Windows laptop and the phone reach each other through Tailscale. When Tailscale loses its control server (after a
+network change, for example) the machine shows as offline everywhere. `tabi net-watch` watches for that:
+
+```bash
+tabi net-watch install     # every 5 minutes: a launchd agent on macOS, a scheduled task (as your user) on Windows
+tabi net-watch remove      # takes it away again
+tabi net-watch run         # one check by hand
+```
+
+Each check does the following:
+
+- Tailscale healthy: nothing. If it was offline before, the Herdr machines (`hc machine login`) are reconnected right away.
+- Tailscale offline: `tailscale down` and `up`, once per check, up to **3 repairs**. If your Tailscale has settings that differ
+  from the default (such as `--accept-routes`), the repair repeats exactly the command Tailscale suggests, so it never changes them.
+- Still offline after 3 repairs: **one** push through the ntfy topic of `data/tabi/notify.json` (the same file the agent alerts
+  use; without a topic there is no push). Then it stays quiet until Tailscale is back. The push names the machine only with
+  `"details": true`.
+
+Limits: it cannot fix a network without internet or a machine that is off, and it needs the machine to be awake. On Linux run
+`tabi net-watch run` from cron or a systemd timer. On the Mac the log is `data/tabi/net-watch.log`. Also turn off key expiry for
+your machines in the Tailscale admin console, and turn on "Run unattended" on Windows.
 
 ## What an install touches
 
