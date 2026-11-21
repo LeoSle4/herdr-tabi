@@ -1,6 +1,7 @@
 import test from "node:test";
+import * as party from "../tabi-party/lib.js";
 import assert from "node:assert/strict";
-import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, tabName, taskId, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, QUOTA_LIMIT, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
+import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, tabName, taskId, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, QUOTA_LIMIT, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree, newQueueEntry, queueNote } from "./lib.js";
 
 const known = [
   { key: "claude", name: "Claude Code", run: ["claude"], installed: true },
@@ -278,4 +279,38 @@ test("quotaNote: says which account, how much and when it renews; and that it is
   assert.match(quotaNote("Codex", { used: 90, resets: at, stale: true }), /dato antiguo/);
   assert.doesNotMatch(quotaNote("Codex", { used: 90, resets: at, stale: false }), /dato antiguo/);
   assert.match(quotaNote("Codex", { used: 90, resets: null, stale: false }), /90 %/);
+});
+
+const QAGENT = { key: "claude", name: "Claude Code", argv: ["claude"] };
+const QNOW = 1_000_000_000_000;
+const qlaunch = () => buildLaunch({ task: "arregla el login", agent: QAGENT, character: { name: "Koyun", file: "k.png" }, space: "spA", folder: "/p/repo" });
+const qrecord = () => newTaskRecord({ task: "arregla el login", agent: QAGENT, character: { name: "Koyun", file: "k.png" }, branch: null, folder: "/p/repo", machine: null, now: QNOW, rnd: "ab12", verify: "node --test" });
+
+test("newQueueEntry: what the scheduler needs to open the tab later, and nothing it could run that is not a tab.new", () => {
+  const e = newQueueEntry({ launch: qlaunch(), record: qrecord(), agent: QAGENT, now: QNOW });
+  assert.equal(e.id, qrecord().id);
+  assert.deepEqual([e.createdAt, e.usageId, e.name, e.task, e.command], [QNOW, "claude", "Claude Code", "arregla el login", "tab.new"]);
+  assert.deepEqual(e.args, qlaunch().args);
+  assert.deepEqual(e.record, qrecord());
+  assert.equal(e.portrait, "k.png");
+  assert.equal(newQueueEntry({ launch: null, record: qrecord(), agent: QAGENT, now: QNOW }), null);
+  assert.equal(newQueueEntry({ launch: qlaunch(), record: null, agent: QAGENT, now: QNOW }), null);
+  // an agent with no meter of its own cannot wait for a quota
+  assert.equal(newQueueEntry({ launch: qlaunch(), record: qrecord(), agent: { key: "shell", name: "Shell", argv: ["zsh"] }, now: QNOW }), null);
+});
+
+test("newQueueEntry: tabi-party reads it, and both agree on where the limit is", () => {
+  const e = newQueueEntry({ launch: qlaunch(), record: qrecord(), agent: QAGENT, now: QNOW });
+  assert.deepEqual(party.parseQueue(JSON.stringify(e)), e);
+  const at = (used) => ({ claude: { windows: [{ label: "5h", used, resets: QNOW + 3600_000 }], okAt: QNOW - 1000, error: null } });
+  for (const used of [0, 50, QUOTA_LIMIT, QUOTA_LIMIT + 1, 100]) {
+    const goes = party.queueDue([e], at(used), QNOW, new Set(["spA"]), {}).launch.length === 1;
+    assert.equal(goes, quotaWarning(at(used).claude, QNOW) === null, `at ${used} %`);
+  }
+});
+
+test("queueNote: what the dialog says about a task that waits, with the renewal time when it is known", () => {
+  assert.match(queueNote("Claude Code", { used: 92, resets: new Date(2026, 10, 21, 14, 40).getTime() }), /Claude Code.*92 %.*14:40/);
+  assert.match(queueNote("Codex", { used: 90, resets: null }), /Codex.*90 %/);
+  assert.match(queueNote("Codex", { used: 90, resets: null }), /baje del 85 %/);
 });

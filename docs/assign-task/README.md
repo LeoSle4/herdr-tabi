@@ -95,3 +95,19 @@ runs it in the agent's folder (the worktree's checkout, or the folder where you 
 - The task is one line (the dialog has a single-line field). Paste a longer one, or put it in a file and say so in the task.
 - It starts an agent in the **current space's machine**: on a remote machine's space the agent runs there.
 - It does not report back by itself: you see it through the card, the notification and the sounds, as for any agent.
+
+## Leaving a task waiting for quota (Dejar en espera)
+
+When the 5-hour window of the account you picked is over 85 % (the amber warning), the dialog also shows **Dejar en espera**. Instead of
+opening the agent now, it saves the task in `data/tabi/queue/` and **opens it by itself when that account is back under 85 %**. It is
+opt-in: nothing waits unless you press it.
+
+What it does **not** do, on purpose:
+
+- It **never changes the account**: the task waits for the one you chose.
+- It **does not retry**: if the agent fails once opened, you are told, nothing is tried again.
+- It runs **only while Herdr is open**, and only trusts a reading of the account made in the last 15 minutes (a stale or failed reading
+  waits). After a launch, the next task of that account waits for a newer reading, so two never open at once.
+- It is not offered with the worktree box ticked (that one opens its own dialog), nor for another machine.
+- If the space it was meant for is gone, it is **not** opened somewhere else: you are told, and you can cancel it in the inbox (`docs/review-inbox`).
+

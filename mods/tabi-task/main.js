@@ -7,8 +7,8 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import * as fs from "fs/promises";
-import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, appHome, checking, window as herdrWindow } from "herdr";
-import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, parsePrefs, prefKey, launchArgv, familyOf, summary } from "./lib.js";
+import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, appHome, checking, notify, window as herdrWindow } from "herdr";
+import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, newQueueEntry, queueNote, parsePrefs, prefKey, launchArgv, familyOf, summary } from "./lib.js";
 
 const PORTRAIT = 40; // the picture of a character; its ring makes it 48
 const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
@@ -117,6 +117,29 @@ export default class TabiTask extends View {
     run(launch.command, launch.args);
   }
 
+  /**
+   * Leaves the task waiting (data/tabi/queue/<id>.json) instead of opening the agent: tabi-party launches it when the account of that agent
+   * is under the limit. Only when the account is over it now and the task has its own folder (no worktree: that one opens a dialog).
+   */
+  enqueue() {
+    const p = props() ?? {};
+    const choices = this.choices();
+    const agent = this.withChoice(choices.find((a) => a.key === this.agent) ?? choices[0]);
+    const character = characterChoices(shared("tabi.portraits")).find((c) => c.file === this.character) ?? null;
+    const launch = buildLaunch({ task: this.task, agent, character, space: p.space, folder: p.folder });
+    const rec = newTaskRecord({ task: this.task, agent, character, branch: null, folder: p.folder, machine: p.machine, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6), verify: p.machine ? null : this.verify });
+    const entry = newQueueEntry({ launch, record: rec, agent, now: Date.now() });
+    if (!entry) return notify({ title: "Este agente no se puede dejar en espera", level: "error" });
+    closeOverlay(p.overlay);
+    (async () => {
+      try {
+        await fs.mkdir(`${appHome()}/data/tabi/queue`, { recursive: true });
+        await fs.writeFile(`${appHome()}/data/tabi/queue/${entry.id}.json`, JSON.stringify(entry));
+        notify({ title: "Tarea en espera", body: `${entry.task} · se lanzará cuando ${agent.name} baje del 85 %`, level: "info" });
+      } catch (e) { notify({ title: "No pude dejar la tarea en espera", body: String(e?.message ?? e), level: "error" }); }
+    })();
+  }
+
   key(e, cx) {
     if (e.key === "escape") { closeOverlay((props() ?? {}).overlay); cx.stop_propagation(); }
   }
@@ -203,6 +226,7 @@ export default class TabiTask extends View {
     const available = worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine });
     const choice = chosen && familyOf(chosen.key) ? this.prefs[prefKey(chosen.key)] : null;
     const warning = chosen ? quotaWarning(this.usage[usageIdFor(chosen.key)], Date.now()) : null;
+    const canQueue = Boolean(warning && !this.worktree && this.task.trim() && !p.machine);
     const picked = characters.find((c) => c.file === this.character) ?? null;
     const branch = branchFor(picked, chosen, this.task, this.takenBranches());
     const note = !this.worktree ? "Su propia rama y carpeta, para que no pise tu trabajo"
@@ -235,12 +259,14 @@ export default class TabiTask extends View {
       .when(Boolean(warning), (el) => el.child(h_flex().id("task-quota").pt(8).gap(6).items_start()
         .child(div().text_size(11).text_color(AMBER).child("⚠"))
         .child(div().flex_1().min_w(0).text_size(11).font_light().text_color(AMBER).child(quotaNote(chosen.name, warning)))))
+      .when(Boolean(warning && this.worktree), (el) => el.child(div().pt(4).text_size(11).font_light().text_color(t.dim).child("Con la casilla de worktree no se puede dejar en espera: desmárcala para poder hacerlo.")))
       .child(this.section("人物", "personaje", t))
       .child(v_flex().gap(10).children(faces.map((row) => h_flex().w_full()
         .children(pad(row, faces[0].length).map((c) => c
           ? this.face(c, (c.file ?? null) === this.character, t, (_e, cx) => { this.character = c.file ?? null; cx.notify(); }) : div().flex_1().min_w(0))))))
       .child(h_flex().pt(22).gap(10)
         .child(this.button("task-cancel", "Cancelar", false, () => closeOverlay(p.overlay), t))
+        .when(canQueue, (el) => el.child(this.button("task-wait", "Dejar en espera", false, () => this.enqueue(), t).tooltip(queueNote(chosen.name, warning))))
         .child(this.button("task-go", "Lanzar", true, () => this.submit(), t))));
   }
 }

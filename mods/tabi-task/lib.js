@@ -185,6 +185,23 @@ export function quotaWarning(entry, now) {
   return { used: w.used, resets: w.resets ?? null, stale: Boolean(entry.error) };
 }
 
+/**
+ * What is saved to launch a task later, when its account has quota (data/tabi/queue/<id>.json): the `tab.new` to run, the record to save
+ * once it runs, and which meter decides. Null when there is nothing to launch or the agent has no meter of its own to wait for.
+ */
+export function newQueueEntry({ launch, record, agent, now }) {
+  const usageId = agent ? usageIdFor(agent.key) : null;
+  if (!launch || launch.command !== "tab.new" || !record || !usageId) return null;
+  return { id: record.id, createdAt: now, usageId, name: agent.name, task: record.task, command: launch.command, args: launch.args, portrait: launch.portrait ?? null, record };
+}
+
+/** What the dialog says about a task that will wait: which account, how full it is, and when it is free. */
+export function queueNote(name, warning) {
+  const at = warning.resets == null ? "" : new Date(warning.resets);
+  const time = at === "" ? "" : `; se renueva a las ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${name} lleva el ${warning.used} % de su ventana de 5 h. Se lanzará sola cuando baje del ${QUOTA_LIMIT} %${time}`;
+}
+
 /** The line under the agents: which account, how much of its 5 hours it has used, when it renews. It does not stop anything. */
 export function quotaNote(name, warning) {
   const at = warning.resets == null ? "" : new Date(warning.resets);
