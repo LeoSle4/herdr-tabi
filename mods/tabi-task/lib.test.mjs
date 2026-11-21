@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, tabName, taskId, newTaskRecord, coverFor, fadeSteps, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
+import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, tabName, taskId, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, QUOTA_LIMIT, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
 
 const known = [
   { key: "claude", name: "Claude Code", run: ["claude"], installed: true },
@@ -234,4 +234,48 @@ test("newTaskRecord: the check command is saved trimmed, and null when there is 
   assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1, verify: "   " }).verify, null);
   assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1 }).verify, null);
   assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1, verify: "a".repeat(500) }).verify.length, 200);
+});
+
+test("usageIdFor: which meter of tabi-usage is the one of the agent chosen", () => {
+  assert.equal(usageIdFor("claude"), "claude");
+  assert.equal(usageIdFor("claude-code"), "claude");
+  assert.equal(usageIdFor("codex"), "codex");
+  assert.equal(usageIdFor("account-claude2"), "claude2");
+  assert.equal(usageIdFor("gemini"), null);
+  assert.equal(usageIdFor(undefined), null);
+});
+
+const NOW = 1_000_000;
+const entry = (used, extra = {}) => ({ windows: [{ label: "5h", used, resets: NOW + 3600_000 }, { label: "weekly", used: 10, resets: NOW + 9e8 }], okAt: NOW - 1000, error: null, ...extra });
+
+test("quotaWarning: the 5-hour window above the limit warns; at or under it does not", () => {
+  assert.equal(QUOTA_LIMIT, 85);
+  assert.deepEqual(quotaWarning(entry(92), NOW), { used: 92, resets: NOW + 3600_000, stale: false });
+  assert.equal(quotaWarning(entry(86), NOW).used, 86);
+  assert.equal(quotaWarning(entry(85), NOW), null);
+  assert.equal(quotaWarning(entry(10), NOW), null);
+});
+
+test("quotaWarning: the week does not decide it, and a window that has already reset says nothing", () => {
+  const week = { windows: [{ label: "weekly", used: 99, resets: NOW + 1e9 }], okAt: NOW, error: null };
+  assert.equal(quotaWarning(week, NOW), null);
+  assert.equal(quotaWarning({ windows: [{ label: "5h", used: 95, resets: NOW - 1 }], okAt: NOW - 9e6, error: null }, NOW), null);
+});
+
+test("quotaWarning: a reading that failed is still shown, marked as old; no reading, no warning", () => {
+  assert.equal(quotaWarning(entry(90, { error: "sin conexión" }), NOW).stale, true);
+  assert.equal(quotaWarning(undefined, NOW), null);
+  assert.equal(quotaWarning({ windows: [], okAt: null, error: "x" }, NOW), null);
+  assert.equal(quotaWarning({ windows: [{ label: "5h", used: null, resets: null }] }, NOW), null);
+});
+
+test("quotaNote: says which account, how much and when it renews; and that it is not stopping anything", () => {
+  const at = new Date(2026, 10, 21, 14, 49).getTime();
+  const note = quotaNote("Claude Code · claude2", { used: 92, resets: at, stale: false });
+  assert.match(note, /Claude Code · claude2/);
+  assert.match(note, /92 %/);
+  assert.match(note, /14:49/);
+  assert.match(quotaNote("Codex", { used: 90, resets: at, stale: true }), /dato antiguo/);
+  assert.doesNotMatch(quotaNote("Codex", { used: 90, resets: at, stale: false }), /dato antiguo/);
+  assert.match(quotaNote("Codex", { used: 90, resets: null, stale: false }), /90 %/);
 });

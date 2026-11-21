@@ -8,7 +8,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import * as fs from "fs/promises";
 import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, appHome, checking, window as herdrWindow } from "herdr";
-import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps } from "./lib.js";
+import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote } from "./lib.js";
 
 const PORTRAIT = 40; // the picture of a character; its ring makes it 48
 const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
@@ -17,6 +17,7 @@ const COVER_W = 680; // the cover picture is wider than any dialog it is shown i
 const COVER_H = 112;
 const FADE_BANDS = 9;
 const FADE_BAND_H = 7;
+const AMBER = "#d9a441"; // the same amber as the meters of tabi-usage
 
 export default class TabiTask extends View {
   init(_props, cx) {
@@ -27,6 +28,7 @@ export default class TabiTask extends View {
     this.worktree = false; // the box "En un worktree nuevo"
     this.known = [];
     this.failed = false;
+    this.usage = {}; // what tabi-usage knows of each account (data/tabi/usage.json), for the warning of the 5-hour window
     this.cover = null; // the picture of the cover (relative to the app home), or null
     this.covers = { map: {}, images: [] };
     this.input = InputState.new({ value: "" });
@@ -53,6 +55,7 @@ export default class TabiTask extends View {
         this.covers.images = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/backdrops.json`, "utf8")).images ?? [];
       } catch { /* no pictures yet: the dialog has no cover */ }
       this.cover = coverFor(this.covers.map, this.covers.images, p.space);
+      try { this.usage = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/usage.json`, "utf8")); } catch { /* no readings yet: no warning */ }
       cx.notify();
     });
     cx.spawn(async (cx) => {
@@ -191,6 +194,7 @@ export default class TabiTask extends View {
     const characters = characterChoices(shared("tabi.portraits"));
     const where = String(p.folder ?? "").split(/[\\/]/).filter(Boolean).pop();
     const available = worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine });
+    const warning = chosen ? quotaWarning(this.usage[usageIdFor(chosen.key)], Date.now()) : null;
     const picked = characters.find((c) => c.file === this.character) ?? null;
     const branch = branchFor(picked, chosen, this.task, this.takenBranches());
     const note = !this.worktree ? "Su propia rama y carpeta, para que no pise tu trabajo"
@@ -218,6 +222,9 @@ export default class TabiTask extends View {
           .children(pad(row, agentRows[0].length).map((a) => a
             ? this.chip(`agent-${a.key}`, a.name, chosen?.key === a.key, (_e, cx) => { this.agent = a.key; cx.notify(); }, t) : div().flex_1()))))
         : div().text_size(11.5).font_light().text_color(t.dim).child(this.failed ? "No se pudo comprobar qué agentes hay instalados" : "Buscando agentes…"))
+      .when(Boolean(warning), (el) => el.child(h_flex().id("task-quota").pt(8).gap(6).items_start()
+        .child(div().text_size(11).text_color(AMBER).child("⚠"))
+        .child(div().flex_1().min_w(0).text_size(11).font_light().text_color(AMBER).child(quotaNote(chosen.name, warning)))))
       .child(this.section("人物", "personaje", t))
       .child(v_flex().gap(10).children(faces.map((row) => h_flex().w_full()
         .children(pad(row, faces[0].length).map((c) => c
