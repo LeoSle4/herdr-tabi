@@ -110,3 +110,77 @@ export function groupReview(list) {
   const items = list ?? [];
   return GROUPS.map((g) => ({ ...g, items: items.filter((r) => reviewState(r) === g.key) })).filter((g) => g.items.length);
 }
+
+/** One entry per changed file: the tracked ones with their lines (a binary one has none, it shows "-"), then the ones git does not follow yet. */
+export function fileChanges(numstat, status) {
+  const files = [];
+  for (const line of String(numstat ?? "").split("\n")) {
+    const [a, d, ...path] = line.split("\t");
+    if (!path.length) continue;
+    files.push({ path: path.join("\t"), add: /^\d+$/.test(a) ? Number(a) : null, del: /^\d+$/.test(d) ? Number(d) : null, untracked: false });
+  }
+  for (const line of String(status ?? "").split("\n")) {
+    if (line.startsWith("??")) files.push({ path: line.slice(3), add: null, del: null, untracked: true });
+  }
+  return files;
+}
+
+/** A path that fits in `max` characters keeping its end, which is what tells the files apart: "…/lib.test.mjs". */
+export function shortPath(path, max) {
+  const p = String(path ?? "");
+  if (p.length <= max) return p;
+  const parts = p.split("/");
+  let tail = "";
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const next = tail ? `${parts[i]}/${tail}` : parts[i];
+    if (`…/${next}`.length > max) break;
+    tail = next;
+  }
+  return tail ? `…/${tail}` : `…${p.slice(-(max - 1))}`;
+}
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/** What ended in the last 24 hours, reviewed or not: how many, what their checks said, and how many each agent did (most first). */
+export function daySummary(records, now) {
+  const out = { total: 0, pass: 0, fail: 0, none: 0, running: 0, reviewed: 0, agents: [] };
+  const by = new Map();
+  for (const r of records ?? []) {
+    if (r.status !== "done" || r.finishedAt == null || now - r.finishedAt > DAY_MS) continue;
+    out.total += 1;
+    out[reviewState(r)] += 1;
+    if (r.reviewed) out.reviewed += 1;
+    by.set(r.agent, (by.get(r.agent) ?? 0) + 1);
+  }
+  out.agents = [...by].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+  return out;
+}
+
+/** The summary of the day in one line, with only what there is in it; "" when nothing ended. */
+export function summaryText(s) {
+  if (!s || !s.total) return "";
+  const parts = [`Hoy: ${s.total} ${s.total === 1 ? "tarea" : "tareas"}`];
+  if (s.pass) parts.push(`${s.pass} ✓`);
+  if (s.fail) parts.push(`${s.fail} ✗`);
+  if (s.running) parts.push(`${s.running} comprobando`);
+  if (s.none) parts.push(`${s.none} sin comprobación`);
+  if (s.reviewed) parts.push(`${s.reviewed} ${s.reviewed === 1 ? "revisada" : "revisadas"}`);
+  for (const [name, n] of s.agents) parts.push(`${name} ${n}`);
+  return parts.join(" · ");
+}
+
+// --- The tasks waiting for quota (data/tabi/queue/<id>.json; tabi-task writes them, tabi-party opens them). A copy of tabi-party/lib.js. ---
+/** A queued entry as saved, or null when it is not a usable one. */
+export function parseQueue(text) {
+  let e;
+  try { e = JSON.parse(text); } catch { return null; }
+  if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+  if (typeof e.id !== "string" || !e.id || typeof e.usageId !== "string" || !e.usageId || e.command !== "tab.new") return null;
+  if (!e.args || typeof e.args !== "object" || Array.isArray(e.args) || !e.record || typeof e.record !== "object" || typeof e.record.id !== "string") return null;
+  return e;
+}
+
+/** The entries waiting, the one that has waited longest first (the order in which they will open). */
+export function sortQueue(entries) {
+  return [...(entries ?? [])].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+}

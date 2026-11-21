@@ -5,8 +5,8 @@
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { props, closeOverlay, theme, appHome, agents, spaces, exec, run, notify, checking, window as herdrWindow } from "herdr";
-import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, reviewState, groupReview } from "./lib.js";
+import { props, closeOverlay, openOverlay, theme, appHome, agents, spaces, exec, run, notify, checking, window as herdrWindow } from "herdr";
+import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, reviewState, groupReview, fileChanges, shortPath, daySummary, summaryText, parseQueue, sortQueue } from "./lib.js";
 
 const PASS = "#6fbf8a";
 const FAIL = "#e0646a";
@@ -21,13 +21,19 @@ const LOOK = {
 };
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"]; // reads write nothing under .git
 const MAX_ROWS = 8;
+const MAX_FILES = 8; // files listed when a task is opened; the rest is counted
 const tasksDir = () => `${appHome()}/data/tabi/tasks`;
+const queueDir = () => `${appHome()}/data/tabi/queue`;
 
 export default class TabiReview extends View {
   init(_p, cx) {
+    this.queue = []; // the tasks waiting for quota (tabi-party opens them), the oldest first
+    this.all = []; // every record read, to sum up the day
     this.list = []; // the tasks waiting for a review, newest first
     this.stats = {}; // task id -> { files, add, del, untracked } | null (no git) ; absent while it is read
     this.loaded = false;
+    this.files = {}; // task id -> the files it changed (see fileChanges)
+    this.open = new Set(); // ids of the tasks whose files are shown
     this.handle = cx.focus_handle();
     if (checking()) return;
     cx.spawn(async (cx) => {
@@ -48,6 +54,14 @@ export default class TabiReview extends View {
         if (rec) records.push(rec);
       } catch { /* removed while reading */ }
     }
+    const waiting = [];
+    let queued = [];
+    try { queued = (await fs.readdir(queueDir())).filter((n) => n.endsWith(".json")); } catch { /* nothing is waiting */ }
+    for (const name of queued) {
+      try { const e = parseQueue(await fs.readFile(`${queueDir()}/${name}`, "utf8")); if (e) waiting.push(e); } catch { /* opened while reading */ }
+    }
+    this.queue = sortQueue(waiting);
+    this.all = records;
     this.list = pendingReview(records, Date.now()).slice(0, MAX_ROWS);
   }
 
@@ -60,7 +74,10 @@ export default class TabiReview extends View {
         try {
           const numstat = await exec("git", [...READ, "diff", "--numstat", "HEAD"], { cwd: dir, timeout: 15000 });
           const status = await exec("git", [...READ, "status", "--porcelain"], { cwd: dir, timeout: 15000 });
-          if (numstat.code === 0 && status.code === 0) stat = diffStat(numstat.stdout, status.stdout);
+          if (numstat.code === 0 && status.code === 0) {
+            stat = diffStat(numstat.stdout, status.stdout);
+            this.files[rec.id] = fileChanges(numstat.stdout, status.stdout);
+          }
         } catch { /* not a repository, or no git */ }
       }
       this.stats[rec.id] = stat;
@@ -77,6 +94,44 @@ export default class TabiReview extends View {
     if (!a) return notify({ title: "Ese agente ya no está abierto", body: rec.task, level: "info" });
     closeOverlay((props() ?? {}).overlay);
     run("pane.focus", { pane: a.pane });
+  }
+
+  /** Takes a task out of the queue: its file goes, so it never opens. */
+  cancel(entry, cx) {
+    this.queue = this.queue.filter((e) => e.id !== entry.id);
+    cx.notify();
+    (async () => {
+      try { await fs.unlink(`${queueDir()}/${entry.id}.json`); } catch { /* it was opened, or removed, already */ }
+    })();
+  }
+
+  /** The tasks waiting for quota: what they are, since when, and the way out. */
+  waitingGroup(t, now) {
+    const color = WAIT;
+    return v_flex().w_full().flex_none().gap(8)
+      .child(h_flex().gap(8).items_center().px(2)
+        .child(svg(ICON("clock")).size(14).flex_none().text_color(color))
+        .child(div().text_size(12).font_semibold().text_color(color).child("En espera"))
+        .child(div().text_size(11.5).text_color(t.dim).child(String(this.queue.length)))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).font_light().text_color(t.dim).child("· se abren solas cuando su cuenta baje del 85 %, si Herdr está abierto")))
+      .child(v_flex().w_full().rounded(10).border_1().border_color(t.border).bg(t.surface).overflow_hidden()
+        .children(this.queue.map((e, i) => h_flex().id(`wait-${e.id}`).gap(10).items_center().p(12).border_color(t.border)
+          .when(i < this.queue.length - 1, (el) => el.border_b(0.5))
+          .child(h_flex().flex_none().size(28).items_center().justify_center().rounded(8).bg(`${color}26`).child(svg(ICON("clock")).size(16).text_color(color)))
+          .child(v_flex().flex_1().min_w(0).gap(2)
+            .child(div().max_h(36).overflow_hidden().text_size(13).font_semibold().text_color(t.foreground).child(e.task))
+            .child(div().truncate().text_size(11).font_light().text_color(t.dim).child(`${e.name} · ${agoLabel(e.createdAt, now) === "ahora" ? "recién puesta en espera" : `en espera desde ${agoLabel(e.createdAt, now)}`}`)))
+          .child(h_flex().flex_none().w(96).child(this.action(`cancel-${e.id}`, "x", "Cancelar", (_e, cx) => this.cancel(e, cx), t))))));
+  }
+
+  /** Opens the dialog that asks another agent to read the work of this task (it is told to change nothing). */
+  reviewWith(rec) {
+    const a = agentOf(rec, agents(), (x) => this.machineOf(x));
+    const dir = folderFor(rec, spaces());
+    const space = a?.space ?? spaces().find((s) => s.folder === dir)?.id;
+    closeOverlay((props() ?? {}).overlay);
+    openOverlay({ mod: "tabi-launch", kind: "dialog", width: 460, height: 560,
+      props: { mode: "review", rec, from: rec.character ?? rec.agent, space, folder: dir ?? undefined, machine: rec.machine ?? null } });
   }
 
   copy(rec) {
@@ -98,6 +153,24 @@ export default class TabiReview extends View {
 
   key(e, cx) {
     if (e.key === "escape") { closeOverlay((props() ?? {}).overlay); cx.stop_propagation(); }
+  }
+
+  toggle(rec, cx) {
+    if (this.open.has(rec.id)) this.open.delete(rec.id); else this.open.add(rec.id);
+    cx.notify();
+  }
+
+  /** The files a task changed, one per line, with their lines; what does not fit is counted. */
+  fileList(rec, t) {
+    const all = this.files[rec.id] ?? [];
+    const shown = all.slice(0, MAX_FILES);
+    return v_flex().gap(3).pl(18).pt(2)
+      .children(shown.map((f) => h_flex().gap(8).items_center().min_w(0).text_size(11)
+        .child(div().flex_1().min_w(0).truncate().text_color(f.untracked ? t.dim : t.muted).child(shortPath(f.path, 48)))
+        .child(f.untracked ? div().flex_none().text_color(WAIT).child("nuevo")
+          : f.add === null ? div().flex_none().text_color(t.dim).child("binario")
+          : h_flex().flex_none().gap(6).child(div().text_color(PASS).child(`+${f.add}`)).child(div().text_color(FAIL).child(`−${f.del}`)))))
+      .when(all.length > shown.length, (el) => el.child(div().text_size(11).font_light().text_color(t.dim).child(`y ${all.length - shown.length} más`)));
   }
 
   /** A button with its icon: "primary" is the one that closes the task. */
@@ -132,6 +205,8 @@ export default class TabiReview extends View {
         .child(div().text_color(FAIL).child(`−${stat.del}`))
         .when(Boolean(stat.untracked), (el) => el.child(div().text_color(t.dim).child(`${stat.untracked} sin seguimiento`)))
       : div().text_color(t.dim).child("sin cambios");
+    const canOpen = (this.files[rec.id] ?? []).length > 0;
+    const opened = canOpen && this.open.has(rec.id);
     return v_flex().id(`review-${rec.id}`).w_full().flex_none().gap(8).p(12).border_color(t.border)
       .when(!last, (el) => el.border_b(0.5))
       .child(h_flex().gap(10).items_start()
@@ -144,10 +219,14 @@ export default class TabiReview extends View {
       .child(v_flex().gap(4).pl(38)
         .when(Boolean(rec.verify && (state === "pass" || state === "fail")), (el) =>
           el.child(this.note(LOOK[state].icon, color, div().truncate().text_color(color).child(`${rec.verify}${c?.tail ? `: ${c.tail}` : ""}`))))
-        .child(this.note("file-diff", t.dim, changes))
+        .child(h_flex().id(`files-${rec.id}`).gap(4).items_center().min_w(0).when(canOpen, (el) => el.cursor_pointer().hover((x) => x.opacity(0.85)).on_click((_e, cx) => this.toggle(rec, cx)))
+          .when(canOpen, (el) => el.child(svg(ICON(opened ? "chevron-down" : "chevron-right")).size(12).flex_none().text_color(t.dim)))
+          .child(this.note("file-diff", t.dim, changes)))
+        .when(canOpen && opened, (el) => el.child(this.fileList(rec, t)))
         .when(Boolean(rec.branch), (el) => el.child(this.note("git-branch", t.dim, div().truncate().text_color(t.muted).child(rec.branch)))))
       .child(h_flex().pt(2).pl(38).gap(8)
         .child(this.action(`see-${rec.id}`, "eye", "Ver agente", () => this.see(rec), t))
+        .child(this.action(`other-${rec.id}`, "search", "Que otro revise", () => this.reviewWith(rec), t))
         .child(this.action(`copy-${rec.id}`, "copy", "Copiar PR", () => this.copy(rec), t))
         .child(this.action(`done-${rec.id}`, "check", "Revisada", (_e, cx) => this.reviewed(rec, cx), t, true)));
   }
@@ -182,6 +261,7 @@ export default class TabiReview extends View {
     const t = theme();
     const now = Date.now();
     const groups = groupReview(this.list);
+    const day = summaryText(daySummary(this.all, now));
     return v_flex().id("tabi-review").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .w_full().h_full().min_h(0).px(20).pt(18).pb(20).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center().gap(12)
@@ -194,11 +274,13 @@ export default class TabiReview extends View {
       .child(div().id("review-list").flex_1().min_h(0).overflow_y_scrollbar()
         .child(v_flex().gap(16).w_full()
           .when(!this.loaded, (el) => el.child(div().text_size(11.5).font_light().text_color(t.dim).child("Leyendo…")))
-          .when(this.loaded && !this.list.length, (el) => el.child(v_flex().gap(6).items_center().pt(40)
+          .when(this.loaded && !this.list.length && !this.queue.length, (el) => el.child(v_flex().gap(6).items_center().pt(40)
             .child(svg(ICON("circle-check")).size(28).text_color(PASS))
             .child(div().text_size(13).text_color(t.muted).child("Nada por revisar"))
             .child(div().text_size(11.5).font_light().text_color(t.dim).child("Las tareas que terminen aparecerán aquí."))))
-          .children(groups.map((g) => this.group(g, t, now)))))
-      .child(div().pt(12).text_size(11).font_light().text_color(t.dim).child("Esto no hace commit, push ni PR: copia la descripción y publica con tu script."));
+          .children(groups.map((g) => this.group(g, t, now)))
+          .when(this.queue.length > 0, (el) => el.child(this.waitingGroup(t, now)))))
+      .when(Boolean(day), (el) => el.child(div().id("review-day").pt(10).truncate().text_size(11.5).text_color(t.muted).child(day)))
+      .child(div().pt(day ? 4 : 12).text_size(11).font_light().text_color(t.dim).child("Esto no hace commit, push ni PR: copia la descripción y publica con tu script."));
   }
 }
