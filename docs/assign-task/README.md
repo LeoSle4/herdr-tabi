@@ -47,6 +47,17 @@ did, so the task you assign can be followed from the cards.
 The dialog opens with a cover: the picture of the space you are in (the same one behind the window; `docs` of tabi-backdrop), the
 title over it and a fade into the dialog. With no pictures there is no cover.
 
+## Quota warning
+
+Under the agents, an amber line appears when the **5-hour window** of the account you chose is above **85 %**: "Claude Code lleva el
+92 % de su ventana de 5 h · se renueva a las 14:49". It reads what tabi-usage already measures (`data/tabi/usage.json`), so it
+needs those meters.
+
+- It is **only a warning**: it does not block **Lanzar**, queue the task, retry it or switch account. You decide.
+- Claude Code, each extra account and Codex have their own meter. An agent with no meter (Antigravity) never warns.
+- If the last reading failed, the line says "(dato antiguo)". A window that has already reset says nothing, and the week does not
+  decide it: it has its own meter.
+
 ## The record of a task
 
 When you give a task (the field is not empty), a file is saved in `data/tabi/tasks/<date>-<time>-<4 characters>.json`: what you asked,
@@ -66,7 +77,9 @@ The field **確 · comprobar al terminar** takes one command, for example `node 
 runs it in the agent's folder (the worktree's checkout, or the folder where you gave the task) and records what it found:
 
 - **✓** it exited with 0, **✗** it did not (or it could not run, or took more than 5 minutes). The card shows it before the status
-  kanji and its tooltip says "Comprobación (<command>): ✓ <last line it printed>". A toast says it too.
+  kanji and its tooltip says "Comprobación (<command>): ✓ <last line it printed>". A toast says it too and, if you set up the
+  notifications (README, `data/tabi/notify.json`), so do the desktop and the phone: with `details` the character, the command and its last
+  line; without it only "Una comprobación pasó/falló". Leave `"check"` out of `on` to not get them.
 - It is **one command with no shell**: no pipes, no `&&`, no variables. Quotes group an argument with spaces. For something longer,
   put it in a script and run that.
 - Only for this computer: with a remote machine's space the field is not offered.

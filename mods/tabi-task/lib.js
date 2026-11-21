@@ -159,3 +159,35 @@ export function fadeSteps(color, count) {
     return `${color.toLowerCase()}${alpha.toString(16).padStart(2, "0")}`;
   });
 }
+
+/** Above this percent of its 5-hour window an account gets a warning in the dialog. */
+export const QUOTA_LIMIT = 85;
+
+/** The meter of tabi-usage (data/tabi/usage.json) that belongs to the agent chosen in the dialog, or null when it has none. */
+export function usageIdFor(agentKey) {
+  const key = String(agentKey ?? "");
+  if (key.startsWith("account-")) return key.slice("account-".length) || null;
+  if (key.startsWith("claude")) return "claude";
+  if (key.startsWith("codex")) return "codex";
+  return null;
+}
+
+/**
+ * Is the 5-hour window of this account above the limit? `entry` is what tabi-usage keeps for it ({ windows, okAt, error }). Gives
+ * { used, resets, stale } (stale: the last reading failed, so the number is old), or null: no reading, a window that has already
+ * reset (what it said is gone), or one at or under the limit. Only the 5-hour window decides; the week has its own meter.
+ */
+export function quotaWarning(entry, now) {
+  const w = (entry?.windows ?? []).find((x) => x.label !== "weekly");
+  if (!w || typeof w.used !== "number") return null;
+  if (w.resets != null && w.resets <= now) return null;
+  if (w.used <= QUOTA_LIMIT) return null;
+  return { used: w.used, resets: w.resets ?? null, stale: Boolean(entry.error) };
+}
+
+/** The line under the agents: which account, how much of its 5 hours it has used, when it renews. It does not stop anything. */
+export function quotaNote(name, warning) {
+  const at = warning.resets == null ? "" : new Date(warning.resets);
+  const time = at === "" ? "" : ` · se renueva a las ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  return `${name} lleva el ${warning.used} % de su ventana de 5 h${time}${warning.stale ? " (dato antiguo)" : ""}`;
+}
