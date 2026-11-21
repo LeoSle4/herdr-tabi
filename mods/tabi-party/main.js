@@ -12,7 +12,7 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, settings, home, run, openOverlay, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, reviewCount, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -151,6 +151,8 @@ export default class TabiParty extends View {
       try { await fs.writeFile(`${tasksDir()}/${rec.id}.json`, JSON.stringify(done)); records[i] = done; } catch { /* try again on the next round */ }
     }
     for (let i = 0; i < records.length; i++) if (needsCheck(records[i], now)) records[i] = await this.runCheck(records[i]);
+    const waiting = reviewCount(records, now); // tabi-panel says how many tasks are waiting for a review
+    if (waiting !== (shared("tabi.review") ?? 0)) setShared("tabi.review", waiting);
     const key = JSON.stringify(records);
     const changed = key !== this.tasksKey;
     this.tasks = records;

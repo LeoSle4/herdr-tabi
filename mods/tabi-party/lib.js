@@ -330,3 +330,8 @@ export function checkNotice(rec, check) {
   const pass = check.state === "pass";
   return { title: `${who}: la comprobación ${pass ? "pasó ✓" : "falló ✗"}`, body: [rec.verify, check.tail].filter(Boolean).join(" · "), level: pass ? "success" : "error" };
 }
+
+/** How many finished tasks are waiting for the person to review them (the last week): tabi-panel says it, tabi-review lists them. */
+export function reviewCount(records, now) {
+  return (records ?? []).filter((r) => r.status === "done" && !r.reviewed && (r.finishedAt == null || now - r.finishedAt <= 7 * 24 * 3600 * 1000)).length;
+}
