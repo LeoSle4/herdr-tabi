@@ -127,14 +127,15 @@ export function taskId(now, rnd) {
 }
 
 /**
- * What is saved in data/tabi/tasks/<id>.json when a task is given: what was asked, who does it and where. tabi-party finishes it (status,
- * result) when the agent does. Null when nothing was asked (the dialog only opens the agent) or there is no agent.
+ * What is saved in data/tabi/tasks/<id>.json when a task is given: what was asked, who does it and where, and the command that checks
+ * it when it is done (`verify`, optional). tabi-party finishes it (status, result) when the agent does and records what the check found. Null when nothing was asked (the dialog only opens the agent) or there is no agent.
  */
-export function newTaskRecord({ task, agent, character, branch, folder, machine, now, rnd }) {
+export function newTaskRecord({ task, agent, character, branch, folder, machine, now, rnd, verify }) {
   const text = String(task ?? "").trim().slice(0, 500);
   if (!text || !agent) return null;
   return { id: taskId(now, rnd), task: text, agent: agent.name, agentKey: agent.key, character: character?.name ?? null, tab: tabName(character, agent),
-    branch: branch ?? null, folder: folder ?? null, machine: machine ?? null, startedAt: now, status: "running", finishedAt: null, result: null };
+    branch: branch ?? null, folder: folder ?? null, machine: machine ?? null, startedAt: now, status: "running", finishedAt: null, result: null,
+    verify: String(verify ?? "").trim().slice(0, 200) || null, check: null };
 }
 
 /**

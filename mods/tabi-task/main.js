@@ -14,7 +14,7 @@ const PORTRAIT = 40; // the picture of a character; its ring makes it 48
 const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
 const AGENTS_PER_ROW = 3;
 const COVER_W = 680; // the cover picture is wider than any dialog it is shown in, and the dialog cuts it
-const COVER_H = 128;
+const COVER_H = 112;
 const FADE_BANDS = 9;
 const FADE_BAND_H = 7;
 
@@ -35,6 +35,14 @@ export default class TabiTask extends View {
     this.inputFocused = true;
     this.input.on("focus", (_e, cx) => { this.inputFocused = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.inputFocused = false; cx.notify(); });
+    // The command that checks the task when the agent ends (optional; only where tabi can run it: this computer).
+    this.verify = "";
+    this.verifyInput = InputState.new({ value: "" });
+    this.verifyInput.on("change", (_e, cx) => { this.verify = this.verifyInput.value(); cx.notify(); });
+    this.verifyInput.on("submit", () => this.submit());
+    this.verifyFocused = false;
+    this.verifyInput.on("focus", (_e, cx) => { this.verifyFocused = true; cx.notify(); });
+    this.verifyInput.on("blur", (_e, cx) => { this.verifyFocused = false; cx.notify(); });
     this.input.focus();
     cx.timer.after(600, () => this.input.focus());
     this.handle = cx.focus_handle();
@@ -65,7 +73,7 @@ export default class TabiTask extends View {
   /** Saves what was asked in data/tabi/tasks/<id>.json (tabi-party links it to the agent's card). Never gets in the way of the launch. */
   record(agent, character, branch) {
     const p = props() ?? {};
-    const rec = newTaskRecord({ task: this.task, agent, character, branch, folder: p.folder, machine: p.machine, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6) });
+    const rec = newTaskRecord({ task: this.task, agent, character, branch, folder: p.folder, machine: p.machine, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6), verify: p.machine ? null : this.verify });
     if (!rec) return;
     const dir = `${appHome()}/data/tabi/tasks`;
     (async () => {
@@ -200,6 +208,10 @@ export default class TabiTask extends View {
       .child(div().pt(6).text_size(11).font_light().text_color(t.dim).child(where ? `Se abre en «${where}». Sin texto, solo abre el agente.` : "Sin texto, solo abre el agente."))
       .child(this.section("道", "dónde", t))
       .child(this.worktreeBox(t, available, note))
+      .when(!p.machine, (el) => el
+        .child(this.section("確", "comprobar al terminar (opcional)", t))
+        .child(Input.new(this.verifyInput).h(34).px(12).rounded(9).border_1().border_color(this.verifyFocused ? t.accent : t.border).bg(t.background).text_size(12).text_color(t.foreground))
+        .child(div().pt(6).text_size(11).font_light().text_color(t.dim).child("Un comando, sin pipes, p. ej. node --test. Corre en la carpeta del agente y deja ✓ o ✗ en su carta.")))
       .child(this.section("使者", "agente", t))
       .child(choices.length
         ? v_flex().gap(8).children(agentRows.map((row) => h_flex().gap(8)
