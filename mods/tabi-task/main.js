@@ -8,7 +8,7 @@ import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import * as fs from "fs/promises";
 import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, appHome, checking, window as herdrWindow } from "herdr";
-import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote } from "./lib.js";
+import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps, usageIdFor, quotaWarning, quotaNote, parsePrefs, prefKey, launchArgv, familyOf, summary } from "./lib.js";
 
 const PORTRAIT = 40; // the picture of a character; its ring makes it 48
 const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
@@ -28,6 +28,7 @@ export default class TabiTask extends View {
     this.worktree = false; // the box "En un worktree nuevo"
     this.known = [];
     this.failed = false;
+    this.prefs = {}; // the model and effort each agent starts with (the gear of the panel saves them in data/tabi/launch.json)
     this.usage = {}; // what tabi-usage knows of each account (data/tabi/usage.json), for the warning of the 5-hour window
     this.cover = null; // the picture of the cover (relative to the app home), or null
     this.covers = { map: {}, images: [] };
@@ -55,6 +56,7 @@ export default class TabiTask extends View {
         this.covers.images = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/backdrops.json`, "utf8")).images ?? [];
       } catch { /* no pictures yet: the dialog has no cover */ }
       this.cover = coverFor(this.covers.map, this.covers.images, p.space);
+      try { this.prefs = parsePrefs(await fs.readFile(`${appHome()}/data/tabi/launch.json`, "utf8")); } catch { /* nothing chosen */ }
       try { this.usage = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/usage.json`, "utf8")); } catch { /* no readings yet: no warning */ }
       cx.notify();
     });
@@ -66,6 +68,11 @@ export default class TabiTask extends View {
 
   choices() {
     return agentChoices(this.known, shared("tabi.accounts"));
+  }
+
+  /** The agent with the model and effort chosen for it in its command. */
+  withChoice(agent) {
+    return agent ? { ...agent, argv: launchArgv(prefKey(agent.key), agent.argv, this.prefs) } : agent;
   }
 
   /** The branches the spaces are on now: a new one never takes a name already in use. */
@@ -90,7 +97,7 @@ export default class TabiTask extends View {
   submit() {
     const p = props() ?? {};
     const choices = this.choices();
-    const agent = choices.find((a) => a.key === this.agent) ?? choices[0];
+    const agent = this.withChoice(choices.find((a) => a.key === this.agent) ?? choices[0]);
     const character = characterChoices(shared("tabi.portraits")).find((c) => c.file === this.character) ?? null;
     if (this.worktree && worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine }).ok) {
       const branch = branchFor(character, agent, this.task, this.takenBranches());
@@ -194,6 +201,7 @@ export default class TabiTask extends View {
     const characters = characterChoices(shared("tabi.portraits"));
     const where = String(p.folder ?? "").split(/[\\/]/).filter(Boolean).pop();
     const available = worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine });
+    const choice = chosen && familyOf(chosen.key) ? this.prefs[prefKey(chosen.key)] : null;
     const warning = chosen ? quotaWarning(this.usage[usageIdFor(chosen.key)], Date.now()) : null;
     const picked = characters.find((c) => c.file === this.character) ?? null;
     const branch = branchFor(picked, chosen, this.task, this.takenBranches());
@@ -222,6 +230,8 @@ export default class TabiTask extends View {
           .children(pad(row, agentRows[0].length).map((a) => a
             ? this.chip(`agent-${a.key}`, a.name, chosen?.key === a.key, (_e, cx) => { this.agent = a.key; cx.notify(); }, t) : div().flex_1()))))
         : div().text_size(11.5).font_light().text_color(t.dim).child(this.failed ? "No se pudo comprobar qué agentes hay instalados" : "Buscando agentes…"))
+      .when(Boolean(chosen && familyOf(chosen.key)), (el) => el.child(div().pt(8).text_size(11).font_light().text_color(t.dim)
+        .child(`Modelo y esfuerzo: ${summary(choice)} · cámbialos con ⚙ en «iniciar»`)))
       .when(Boolean(warning), (el) => el.child(h_flex().id("task-quota").pt(8).gap(6).items_start()
         .child(div().text_size(11).text_color(AMBER).child("⚠"))
         .child(div().flex_1().min_w(0).text_size(11).font_light().text_color(AMBER).child(quotaNote(chosen.name, warning)))))

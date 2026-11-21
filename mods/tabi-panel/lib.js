@@ -59,3 +59,62 @@ export function parseAhead(code, out) {
 export function filesLabel(n) {
   return n === 0 ? "sin cambios" : `${n} ${n === 1 ? "archivo" : "archivos"}`;
 }
+
+// --- A copy of tabi-launch/lib.js (mods do not import each other; tabi-launch/lib.test.mjs checks that they behave the same) ---
+const SAFE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/;
+const SAFE_EFFORT = /^[a-z]{2,10}$/;
+
+/** "claude" for Claude Code and its extra accounts, "codex" for Codex, null for an agent that has no options here. */
+export function familyOf(key) {
+  const k = String(key ?? "");
+  if (k.startsWith("claude") || k.startsWith("account-")) return "claude";
+  if (k.startsWith("codex")) return "codex";
+  return null;
+}
+
+/** The key a choice is kept under: the same for an agent whatever Herdr calls it ("claude" and "claude-code" are one). */
+export function prefKey(key) {
+  const k = String(key ?? "");
+  if (k.startsWith("account-")) return k;
+  const family = familyOf(k);
+  return family ?? k;
+}
+
+/** data/tabi/launch.json as { key: { model?, effort? } }. Anything that could be taken for a flag or a shell is dropped. */
+export function parsePrefs(text) {
+  let d;
+  try { d = JSON.parse(text); } catch { return {}; }
+  if (!d || typeof d !== "object" || Array.isArray(d)) return {};
+  const out = {};
+  for (const [key, v] of Object.entries(d)) {
+    if (!v || typeof v !== "object") continue;
+    const choice = {};
+    if (typeof v.model === "string" && SAFE_MODEL.test(v.model)) choice.model = v.model;
+    if (typeof v.effort === "string" && SAFE_EFFORT.test(v.effort)) choice.effort = v.effort;
+    if (Object.keys(choice).length) out[key] = choice;
+  }
+  return out;
+}
+
+/** The command of an agent with its model and effort, as flags: Claude `--model --effort`, Codex `-m -c model_reasoning_effort=`. */
+export function launchArgv(key, argv, prefs) {
+  const c = prefs?.[key];
+  const family = familyOf(key);
+  if (!c || !family) return [...argv];
+  const out = [...argv];
+  if (family === "claude") {
+    if (c.model) out.push("--model", c.model);
+    if (c.effort) out.push("--effort", c.effort);
+  } else {
+    if (c.model) out.push("-m", c.model);
+    if (c.effort) out.push("-c", `model_reasoning_effort=${c.effort}`);
+  }
+  return out;
+}
+
+/** What is chosen, in a few words. */
+export function summary(choice) {
+  if (!choice?.model && !choice?.effort) return "por defecto";
+  if (!choice.model) return `esfuerzo ${choice.effort}`;
+  return choice.effort ? `${choice.model} · ${choice.effort}` : choice.model;
+}
