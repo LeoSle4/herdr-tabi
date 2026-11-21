@@ -4,12 +4,13 @@
 // from its own ~/.codex/models_cache.json. With props.mode "switch" (the ⇄ on the card of a Claude agent) it instead types `/model <model>` or
 // `/effort <level>` into that running agent (props: { key, name, pane }); the person presses Enter there. With props.mode "handoff" (the 継 of a
 // card that has a task) it opens a tab with another agent in the same space and folder, told to go on with that task (props: { rec, from,
-// space, folder, machine }).
+// space, folder, machine }). With props.mode "review" (the same props, opened from the inbox of tabi-review) the agent chosen is told to read
+// the work and change nothing.
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { props, closeOverlay, theme, appHome, home, shared, setShared, checking, exec, run, notify, knownAgents, window as herdrWindow } from "herdr";
-import { familyOf, optionsFor, parseCodexModels, parsePrefs, setChoice, summary, slashCommand, switchSession, canSwitch, agentChoices, handoffLaunch, handoffPrompt } from "./lib.js";
+import { familyOf, optionsFor, parseCodexModels, parsePrefs, setChoice, summary, slashCommand, switchSession, canSwitch, agentChoices, handoffLaunch, handoffPrompt, reviewPrompt } from "./lib.js";
 
 const MODELS_PER_ROW = 3;
 const EFFORTS_PER_ROW = 4;
@@ -22,7 +23,8 @@ export default class TabiLaunch extends View {
     const p = props() ?? {};
     this.key = p.key;
     this.switching = p.mode === "switch"; // type a command into a running agent instead of choosing what the next one starts with
-    this.handoff = p.mode === "handoff"; // go on with a task in another agent
+    this.review = p.mode === "review"; // another agent reads the work of a task (it does not change anything)
+    this.handoff = p.mode === "handoff" || this.review; // go on with a task in another agent
     this.rec = p.rec;
     this.from = p.from;
     this.space = p.space;
@@ -102,7 +104,7 @@ export default class TabiLaunch extends View {
   /** Opens the tab of the agent chosen, told to go on with the task, and saves the record that goes with it. */
   launchHandoff(cx) {
     const agent = agentChoices(this.known, shared("tabi.accounts")).find((a) => a.key === this.picked);
-    const r = handoffLaunch({ rec: this.rec, from: this.from, agent, space: this.space, folder: this.folder, prefs: this.prefs, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6) });
+    const r = handoffLaunch({ kind: this.review ? "review" : "handoff", rec: this.rec, from: this.from, agent, space: this.space, folder: this.folder, prefs: this.prefs, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6) });
     if (!r) return;
     closeOverlay((props() ?? {}).overlay);
     run(r.command, r.args);
@@ -118,29 +120,33 @@ export default class TabiLaunch extends View {
   renderHandoff(t) {
     const choices = agentChoices(this.known, shared("tabi.accounts"));
     const picked = choices.find((a) => a.key === this.picked) ?? null;
-    const message = handoffPrompt({ task: this.rec?.task, result: this.rec?.result, from: this.from });
+    const message = this.review
+      ? reviewPrompt({ task: this.rec?.task, result: this.rec?.result, from: this.from, verify: this.rec?.verify, check: this.rec?.check })
+      : handoffPrompt({ task: this.rec?.task, result: this.rec?.result, from: this.from });
     const lines = rows(choices, 2);
     const pad = (row) => [...row, ...Array.from({ length: 2 - row.length }, () => null)];
     return v_flex().id("tabi-handoff").track_focus(this.handle).on_key_down((e, cx) => this.key_(e, cx))
       .w_full().min_h(0).px(20).pt(18).pb(20).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center()
         .child(h_flex().flex_1().gap(10).items_baseline()
-          .child(div().text_size(18).text_color(t.muted).child("継"))
-          .child(div().text_size(15).font_semibold().child("Continuar con otro agente")))
+          .child(div().text_size(18).text_color(t.muted).child(this.review ? "審" : "継"))
+          .child(div().text_size(15).font_semibold().child(this.review ? "Que otro agente revise" : "Continuar con otro agente")))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))
       .child(div().pt(6).truncate().text_size(11).font_light().text_color(t.dim).child(`${this.from ?? ""} · ${this.rec?.task ?? ""}`))
       .child(v_flex().pt(12).child(div().h(0.5).w_full().bg(t.border)))
-      .child(this.section("使者", "agente que sigue", t))
+      .child(this.section("使者", this.review ? "agente que revisa" : "agente que sigue", t))
       .child(choices.length
         ? v_flex().gap(8).children(lines.map((row) => h_flex().gap(8).children(pad(row).map((a) => a
           ? this.chip(`handoff-${a.key}`, a.name, this.picked === a.key, (_e, cx) => { this.picked = a.key; cx.notify(); }, t) : div().flex_1().min_w(0)))))
         : div().text_size(11.5).font_light().text_color(t.dim).child("Buscando agentes…"))
       .child(this.section("言", "lo que se le dirá", t))
       .child(div().max_h(96).overflow_hidden().text_size(11).font_light().text_color(t.muted).child(message))
-      .child(div().pt(10).text_size(11).font_light().text_color(t.dim).child("Se abre en el mismo espacio y carpeta, con la misma comprobación y el modelo que tengas elegido con el ⚙. El agente anterior no se toca."))
+      .child(div().pt(10).text_size(11).font_light().text_color(t.dim).child(this.review
+        ? "Se abre en el mismo espacio y carpeta y solo lee: se le pide que no modifique nada. Usa el modelo que tengas elegido con el ⚙. El agente anterior no se toca."
+        : "Se abre en el mismo espacio y carpeta, con la misma comprobación y el modelo que tengas elegido con el ⚙. El agente anterior no se toca."))
       .child(h_flex().pt(18).gap(10)
         .child(this.button("handoff-cancel", "Cancelar", false, () => closeOverlay((props() ?? {}).overlay), t))
-        .child(this.button("handoff-go", picked ? `Continuar con ${picked.name}` : "Elige un agente", Boolean(picked), (_e, cx) => this.launchHandoff(cx), t)));
+        .child(this.button("handoff-go", picked ? (this.review ? `Que revise ${picked.name}` : `Continuar con ${picked.name}`) : "Elige un agente", Boolean(picked), (_e, cx) => this.launchHandoff(cx), t)));
   }
 
   key_(e, cx) {
