@@ -89,3 +89,24 @@ export function agoLabel(at, now) {
   if (s < 86400) return `hace ${Math.floor(s / 3600)} h`;
   return `hace ${Math.floor(s / 86400)} d`;
 }
+
+/** What the check of a task says: "pass", "fail", "running" (it has one and no answer yet) or "none" (no check was asked for). */
+export function reviewState(rec) {
+  if (!rec.verify) return "none";
+  const c = rec.check;
+  if (!c || c.state === "running") return "running";
+  return c.state === "pass" ? "pass" : "fail";
+}
+
+const GROUPS = [
+  { key: "fail", label: "Necesitan atención", hint: "La comprobación falló: míralas primero" },
+  { key: "pass", label: "Listas para revisar", hint: "La comprobación pasó: queda leer los cambios" },
+  { key: "running", label: "Comprobando", hint: "La comprobación sigue en marcha" },
+  { key: "none", label: "Sin comprobación", hint: "No se pidió comprobar: no hay prueba de que funcione" },
+];
+
+/** The tasks to review in groups by what their check says, urgent ones first; a group with nothing in it is left out. */
+export function groupReview(list) {
+  const items = list ?? [];
+  return GROUPS.map((g) => ({ ...g, items: items.filter((r) => reviewState(r) === g.key) })).filter((g) => g.items.length);
+}

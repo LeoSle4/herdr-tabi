@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, REVIEW_WINDOW_MS } from "./lib.js";
+import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, REVIEW_WINDOW_MS, reviewState, groupReview } from "./lib.js";
 import * as party from "../tabi-party/lib.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -119,4 +119,30 @@ test("agoLabel: how long ago a task finished, in a few words", () => {
   assert.equal(agoLabel(now - 2 * DAY, now), "hace 2 d");
   assert.equal(agoLabel(null, now), "");
   assert.equal(agoLabel(now + 5000, now), "ahora");
+});
+
+test("reviewState: what the check of a task says, in four words", () => {
+  assert.equal(reviewState(rec()), "pass");
+  assert.equal(reviewState(rec({ check: { state: "fail", code: 1, tail: "2 failed" } })), "fail");
+  assert.equal(reviewState(rec({ check: { state: "running" } })), "running");
+  assert.equal(reviewState(rec({ check: null })), "running"); // it has a check to run and no answer yet
+  assert.equal(reviewState(rec({ verify: null, check: null })), "none");
+  assert.equal(reviewState(rec({ verify: "", check: null })), "none");
+});
+
+test("groupReview: failures first, then what passed, what is checking, what has no check; empty groups are left out; the order inside a group is kept", () => {
+  const list = [
+    rec({ id: "n1", verify: null, check: null }),
+    rec({ id: "p1" }),
+    rec({ id: "f1", check: { state: "fail", code: 1, tail: "x" } }),
+    rec({ id: "r1", check: { state: "running" } }),
+    rec({ id: "p2" }),
+  ];
+  const groups = groupReview(list);
+  assert.deepEqual(groups.map((g) => g.key), ["fail", "pass", "running", "none"]);
+  assert.deepEqual(groups.map((g) => g.items.map((r) => r.id)), [["f1"], ["p1", "p2"], ["r1"], ["n1"]]);
+  for (const g of groups) { assert.ok(g.label && g.hint, `${g.key} explains itself`); }
+  assert.deepEqual(groupReview([rec({ id: "p1" })]).map((g) => g.key), ["pass"]);
+  assert.deepEqual(groupReview([]), []);
+  assert.deepEqual(groupReview(undefined), []);
 });

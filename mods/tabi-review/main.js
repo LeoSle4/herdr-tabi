@@ -2,14 +2,23 @@
 // nobody has looked at is a row: who did it, what was asked, what the agent said, what its check found and what changed in its folder (read
 // with git, read-only). Three actions: see the agent, copy the description of a pull request already written, and mark it as reviewed. It
 // never commits, pushes or opens a pull request: that stays with the script you run.
-import { View, div } from "gpui-kit";
+import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { props, closeOverlay, theme, appHome, agents, spaces, exec, run, notify, checking, window as herdrWindow } from "herdr";
-import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel } from "./lib.js";
+import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, reviewState, groupReview } from "./lib.js";
 
 const PASS = "#6fbf8a";
 const FAIL = "#e0646a";
+const WAIT = "#d9a441";
+const ICON = (name) => `mods/tabi-review/${name}.svg`;
+// What each group looks like: its icon and its color. The tint is the same color with a little opacity.
+const LOOK = {
+  fail: { icon: "circle-x", color: FAIL },
+  pass: { icon: "circle-check", color: PASS },
+  running: { icon: "clock", color: WAIT },
+  none: { icon: "circle-minus", color: null },
+};
 const READ = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"]; // reads write nothing under .git
 const MAX_ROWS = 8;
 const tasksDir = () => `${appHome()}/data/tabi/tasks`;
@@ -91,54 +100,105 @@ export default class TabiReview extends View {
     if (e.key === "escape") { closeOverlay((props() ?? {}).overlay); cx.stop_propagation(); }
   }
 
-  action(id, label, onClick, t) {
-    return h_flex().id(id).flex_1().min_w(0).h(30).px(8).items_center().justify_center().rounded(8).cursor_pointer()
-      .border_1().border_color(t.input).bg(t.raised).text_size(11.5).text_color(t.foreground)
-      .hover((s) => s.opacity(0.88)).on_click(onClick).child(div().truncate().child(label));
+  /** A button with its icon: "primary" is the one that closes the task. */
+  action(id, icon, label, onClick, t, primary = false) {
+    return h_flex().id(id).flex_1().min_w(0).h(30).px(8).gap(6).items_center().justify_center().rounded(8).cursor_pointer()
+      .border_1().border_color(primary ? PASS : t.input).bg(primary ? `${PASS}26` : t.raised)
+      .text_size(11.5).text_color(primary ? PASS : t.foreground)
+      .hover((s) => s.opacity(0.85)).on_click(onClick)
+      .child(svg(ICON(icon)).size(13).flex_none())
+      .child(div().truncate().child(label));
   }
 
-  row(rec, t, now) {
+  /** A line of small print that starts with an icon. */
+  note(icon, color, ...parts) {
+    return h_flex().gap(6).items_center().min_w(0)
+      .child(svg(ICON(icon)).size(12).flex_none().text_color(color))
+      .child(h_flex().gap(6).min_w(0).overflow_hidden().text_size(11).font_light().children(parts));
+  }
+
+  row(rec, t, now, last) {
+    const state = reviewState(rec);
+    const look = LOOK[state];
+    const color = look.color ?? t.dim;
     const c = rec.check;
-    const mark = !rec.verify ? "" : !c || c.state === "running" ? "…" : c.state === "pass" ? "✓" : "✗";
-    const color = mark === "✓" ? PASS : mark === "✗" ? FAIL : t.dim;
     const stat = this.stats[rec.id];
-    const where = rec.branch ? ` · ${rec.branch}` : "";
-    const changes = !(rec.id in this.stats) ? "leyendo cambios…"
-      : stat === null ? "sin información de git"
-      : stat.files || stat.untracked ? `${stat.files} archivos  +${stat.add} −${stat.del}${stat.untracked ? `  ${stat.untracked} sin seguimiento` : ""}${where}`
-      : `sin cambios${where}`;
-    return v_flex().id(`review-${rec.id}`).w_full().flex_none().gap(6).p(12).rounded(9).border_1().border_color(t.border).bg(t.surface)
-      .child(h_flex().items_baseline().gap(8)
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(t.foreground).child(rec.character ?? rec.agent))
-        .when(Boolean(mark), (el) => el.child(div().text_size(12).text_color(color).child(mark)))
-        .child(div().flex_none().text_size(11).font_light().text_color(t.dim).child(agoLabel(rec.finishedAt, now))))
-      .child(div().max_h(34).overflow_hidden().text_size(12).text_color(t.muted).child(rec.task))
-      .when(Boolean(rec.result), (el) => el.child(div().max_h(32).overflow_hidden().text_size(11).font_light().text_color(t.dim).child(rec.result)))
-      .when(Boolean(rec.verify && c && c.state !== "running" && c.tail), (el) => el.child(div().truncate().text_size(11).font_light().text_color(color).child(`${rec.verify}: ${c.tail}`)))
-      .child(div().truncate().text_size(11).font_light().text_color(t.muted).child(changes))
-      .child(h_flex().pt(4).gap(8)
-        .child(this.action(`see-${rec.id}`, "Ver agente", () => this.see(rec), t))
-        .child(this.action(`copy-${rec.id}`, "Copiar PR", () => this.copy(rec), t))
-        .child(this.action(`done-${rec.id}`, "Revisada", (_e, cx) => this.reviewed(rec, cx), t)));
+    const who = [rec.character ?? rec.agent, rec.agentKey && rec.character ? rec.agent : null, agoLabel(rec.finishedAt, now)].filter(Boolean).join(" · ");
+    const changes = !(rec.id in this.stats) ? div().text_color(t.dim).child("leyendo cambios…")
+      : stat === null ? div().text_color(t.dim).child("sin información de git")
+      : stat.files || stat.untracked ? h_flex().gap(8)
+        .child(div().text_color(t.muted).child(`${stat.files} ${stat.files === 1 ? "archivo" : "archivos"}`))
+        .child(div().text_color(PASS).child(`+${stat.add}`))
+        .child(div().text_color(FAIL).child(`−${stat.del}`))
+        .when(Boolean(stat.untracked), (el) => el.child(div().text_color(t.dim).child(`${stat.untracked} sin seguimiento`)))
+      : div().text_color(t.dim).child("sin cambios");
+    return v_flex().id(`review-${rec.id}`).w_full().flex_none().gap(8).p(12).border_color(t.border)
+      .when(!last, (el) => el.border_b(0.5))
+      .child(h_flex().gap(10).items_start()
+        .child(h_flex().flex_none().size(28).items_center().justify_center().rounded(8).bg(`${color}26`)
+          .child(svg(ICON(look.icon)).size(16).text_color(color)))
+        .child(v_flex().flex_1().min_w(0).gap(3)
+          .child(div().max_h(36).overflow_hidden().text_size(13).font_semibold().text_color(t.foreground).child(rec.task))
+          .child(div().truncate().text_size(11).font_light().text_color(t.dim).child(who))
+          .when(Boolean(rec.result), (el) => el.child(div().max_h(32).overflow_hidden().text_size(11.5).font_light().text_color(t.muted).child(rec.result)))))
+      .child(v_flex().gap(4).pl(38)
+        .when(Boolean(rec.verify && (state === "pass" || state === "fail")), (el) =>
+          el.child(this.note(LOOK[state].icon, color, div().truncate().text_color(color).child(`${rec.verify}${c?.tail ? `: ${c.tail}` : ""}`))))
+        .child(this.note("file-diff", t.dim, changes))
+        .when(Boolean(rec.branch), (el) => el.child(this.note("git-branch", t.dim, div().truncate().text_color(t.muted).child(rec.branch)))))
+      .child(h_flex().pt(2).pl(38).gap(8)
+        .child(this.action(`see-${rec.id}`, "eye", "Ver agente", () => this.see(rec), t))
+        .child(this.action(`copy-${rec.id}`, "copy", "Copiar PR", () => this.copy(rec), t))
+        .child(this.action(`done-${rec.id}`, "check", "Revisada", (_e, cx) => this.reviewed(rec, cx), t, true)));
+  }
+
+  /** A group: what it is, how many, and what to do about it; its tasks in one panel. */
+  group(g, t, now) {
+    const look = LOOK[g.key];
+    const color = look.color ?? t.dim;
+    return v_flex().w_full().flex_none().gap(8)
+      .child(h_flex().gap(8).items_center().px(2)
+        .child(svg(ICON(look.icon)).size(14).flex_none().text_color(color))
+        .child(div().text_size(12).font_semibold().text_color(color).child(g.label))
+        .child(div().text_size(11.5).text_color(t.dim).child(String(g.items.length)))
+        .child(div().flex_1().min_w(0).truncate().text_size(11).font_light().text_color(t.dim).child(`· ${g.hint}`)))
+      .child(v_flex().w_full().rounded(10).border_1().border_color(t.border).bg(t.surface).overflow_hidden()
+        .children(g.items.map((rec, i) => this.row(rec, t, now, i === g.items.length - 1))));
+  }
+
+  /** The counts at the top: one chip per group that has something in it. */
+  summary(groups, t) {
+    return h_flex().gap(8).items_center()
+      .children(groups.map((g) => {
+        const look = LOOK[g.key];
+        const color = look.color ?? t.dim;
+        return h_flex().gap(5).items_center().h(22).px(8).rounded(11).bg(`${color}26`)
+          .child(svg(ICON(look.icon)).size(12).flex_none().text_color(color))
+          .child(div().text_size(11.5).text_color(color).child(String(g.items.length)));
+      }));
   }
 
   render() {
     const t = theme();
     const now = Date.now();
+    const groups = groupReview(this.list);
     return v_flex().id("tabi-review").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
       .w_full().h_full().min_h(0).px(20).pt(18).pb(20).bg(t.popover).text_color(t.foreground)
-      .child(h_flex().items_center()
-        .child(h_flex().flex_1().gap(10).items_baseline()
-          .child(div().text_size(18).text_color(t.muted).child("審"))
+      .child(h_flex().items_center().gap(12)
+        .child(h_flex().flex_1().min_w(0).gap(10).items_center()
+          .child(svg(ICON("inbox")).size(18).flex_none().text_color(t.muted))
           .child(div().text_size(15).font_semibold().child("Revisión"))
-          .child(div().text_size(12).font_light().text_color(t.dim).child(this.list.length ? `· ${this.list.length} por revisar` : "")))
+          .child(this.summary(groups, t)))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))
       .child(v_flex().pt(12).pb(12).child(div().h(0.5).w_full().bg(t.border)))
       .child(div().id("review-list").flex_1().min_h(0).overflow_y_scrollbar()
-        .child(v_flex().gap(10).w_full()
+        .child(v_flex().gap(16).w_full()
           .when(!this.loaded, (el) => el.child(div().text_size(11.5).font_light().text_color(t.dim).child("Leyendo…")))
-          .when(this.loaded && !this.list.length, (el) => el.child(div().text_size(12).font_light().text_color(t.dim).child("Nada por revisar. Las tareas que terminen aparecerán aquí.")))
-          .children(this.list.map((rec) => this.row(rec, t, now)))))
+          .when(this.loaded && !this.list.length, (el) => el.child(v_flex().gap(6).items_center().pt(40)
+            .child(svg(ICON("circle-check")).size(28).text_color(PASS))
+            .child(div().text_size(13).text_color(t.muted).child("Nada por revisar"))
+            .child(div().text_size(11.5).font_light().text_color(t.dim).child("Las tareas que terminen aparecerán aquí."))))
+          .children(groups.map((g) => this.group(g, t, now)))))
       .child(div().pt(12).text_size(11).font_light().text_color(t.dim).child("Esto no hace commit, push ni PR: copia la descripción y publica con tu script."));
   }
 }
