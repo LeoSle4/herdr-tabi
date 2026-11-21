@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
+import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
 
 test("status: working 働 cream, blocked 待 amber, idle and done 済 gray", () => {
   assert.deepEqual([statusInfo("working").kanji, statusInfo("working").accent], ["働", "solid"]);
@@ -357,4 +357,68 @@ test("taskEnded: an agent that works or waits for you has not ended", () => {
   assert.equal(taskEnded("working", true, r, 10 * 60000), false);
   assert.equal(taskEnded("blocked", true, r, 10 * 60000), false);
   assert.equal(taskEnded(undefined, true, r, 10 * 60000), false);
+});
+
+test("parseCommand: a command and its arguments, with quotes for the ones that have spaces, and nothing a shell would do", () => {
+  assert.deepEqual(parseCommand("node --test"), { command: "node", args: ["--test"] });
+  assert.deepEqual(parseCommand("  npm   run  lint "), { command: "npm", args: ["run", "lint"] });
+  assert.deepEqual(parseCommand('python3 -m unittest "my tests"'), { command: "python3", args: ["-m", "unittest", "my tests"] });
+  assert.deepEqual(parseCommand("pytest -k 'a b'"), { command: "pytest", args: ["-k", "a b"] });
+  assert.equal(parseCommand(""), null);
+  assert.equal(parseCommand("   "), null);
+  assert.equal(parseCommand(undefined), null);
+  assert.equal(parseCommand('node "unclosed'), null);
+});
+
+test("verifyDir: a worktree is checked where it lives; any other task where it was given", () => {
+  assert.equal(verifyDir(rec({ branch: "tabi/x", folder: "/repo" }), "/worktrees/repo/x"), "/worktrees/repo/x");
+  assert.equal(verifyDir(rec({ branch: null, folder: "/repo" }), "/elsewhere"), "/repo");
+  assert.equal(verifyDir(rec({ branch: "tabi/x", folder: "/repo" }), undefined), "/repo");
+  assert.equal(verifyDir(rec({ branch: null, folder: null }), undefined), null);
+});
+
+test("checkResult: the exit code says pass or fail, and the last line of the output is kept to explain it", () => {
+  assert.deepEqual(checkResult(0, "ok\nall 12 passed\n", 9000), { state: "pass", code: 0, at: 9000, tail: "all 12 passed" });
+  assert.deepEqual(checkResult(1, "x\n\nFAIL: 2 tests\n\n", 9000), { state: "fail", code: 1, at: 9000, tail: "FAIL: 2 tests" });
+  assert.equal(checkResult(2, "", 1).tail, "");
+  assert.equal(checkResult(0, "x".repeat(500), 1).tail.length, 140);
+  assert.equal(checkResult(null, "boom", 1).state, "fail"); // it did not even run to the end (a timeout, no such command)
+});
+
+test("needsCheck: only a finished task with a command and no result yet", () => {
+  assert.equal(needsCheck(rec({ status: "done", verify: "node --test", check: null })), true);
+  assert.equal(needsCheck(rec({ status: "running", verify: "node --test" })), false);
+  assert.equal(needsCheck(rec({ status: "done", verify: null })), false);
+  assert.equal(needsCheck(rec({ status: "done", verify: "node --test", check: { state: "pass", at: 1 } })), false);
+});
+
+test("needsCheck: a check left 'running' by a Herdr that closed is tried again after the time it could have taken", () => {
+  const stuck = rec({ status: "done", verify: "x", check: { state: "running", at: 1000 } });
+  assert.equal(needsCheck(stuck, 1000 + 1000), false);
+  assert.equal(needsCheck(stuck, 1000 + CHECK_TIMEOUT_MS + 1000), true);
+});
+
+test("checkMark: a tick, a cross or a wait for the card; nothing without a check", () => {
+  assert.equal(checkMark(rec({ verify: "x", status: "done", check: { state: "pass" } })), "✓");
+  assert.equal(checkMark(rec({ verify: "x", status: "done", check: { state: "fail" } })), "✗");
+  assert.equal(checkMark(rec({ verify: "x", status: "done", check: { state: "running" } })), "…");
+  assert.equal(checkMark(rec({ verify: "x", status: "done", check: null })), "…");
+  assert.equal(checkMark(rec({ verify: "x", status: "running", check: null })), "");
+  assert.equal(checkMark(rec({ verify: null })), "");
+  assert.equal(checkMark(null), "");
+});
+
+test("taskTooltip: says what the check found", () => {
+  const done = { status: "done", result: "Listo.", verify: "node --test" };
+  assert.match(taskTooltip(rec({ ...done, check: { state: "pass", tail: "12 passed" } })), /Comprobación \(node --test\): ✓ 12 passed$/);
+  assert.match(taskTooltip(rec({ ...done, check: { state: "fail", tail: "2 failed" } })), /✗ 2 failed$/);
+  assert.match(taskTooltip(rec({ ...done, check: { state: "running" } })), /comprobando/);
+});
+
+test("checkNotice: who it is about, whether it passed, and what the command printed last", () => {
+  const r = rec({ character: "Koyun", verify: "node --test" });
+  assert.deepEqual(checkNotice(r, { state: "pass", tail: "12 passed" }), { title: "Koyun: la comprobación pasó ✓", body: "node --test · 12 passed", level: "success" });
+  assert.deepEqual(checkNotice(r, { state: "fail", tail: "2 failed" }), { title: "Koyun: la comprobación falló ✗", body: "node --test · 2 failed", level: "error" });
+  assert.equal(checkNotice(rec({ character: null, agent: "Codex", verify: "x" }), { state: "pass", tail: "" }).title, "Codex: la comprobación pasó ✓");
+  assert.equal(checkNotice(r, { state: "pass", tail: "" }).body, "node --test");
 });
