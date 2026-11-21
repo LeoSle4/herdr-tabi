@@ -4,14 +4,21 @@ When an agent finishes a task you gave with **Asignar tarea…** (`docs/assign-t
 so under **今 · ahora**: **"3 tareas por revisar ›"**. Click it to open **審 · Revisión**, the inbox of the tasks that ended and that
 nobody has marked as reviewed (the last week, newest first, up to 8).
 
-Each row has:
+The tasks come in groups, by what their check said, so you know where to look first:
 
-- who did it (the character, or the agent), **✓** or **✗** if the task had a check (`docs/assign-task`), and how long ago it ended;
-- what you asked, what the agent said last (if the hooks recorded it, `docs/subagents`) and what its check printed;
-- **what changed in its folder**: files, `+lines −lines`, and files git does not follow yet. For a worktree task it is looked at where
-  its branch lives. It is read with git, **read-only** (nothing is written under `.git`).
+- **✗ Necesitan atención**: the check failed. Look at these first.
+- **✓ Listas para revisar**: the check passed; what is left is reading the changes.
+- **Comprobando**: the check is still running.
+- **Sin comprobación**: no check was asked for, so nothing proves it works.
 
-And three buttons:
+A group with nothing in it is not shown, and the chips next to the title count each one. Each row has:
+
+- what you asked (as the title), who did it (the character and the agent) and how long ago it ended;
+- what the agent said last (if the hooks recorded it, `docs/subagents`) and what its check printed;
+- **what changed in its folder**: files, `+lines −lines` (green and red), and files git does not follow yet, with the branch if it has
+  one. For a worktree task it is looked at where its branch lives. It is read with git, **read-only** (nothing is written under `.git`).
+
+And three buttons, each with its icon:
 
 - **Ver agente**: focuses the agent's tab (it says so when the agent is no longer open).
 - **Copiar PR**: copies a description already written for a pull request: the task as the title, what the agent said, the check and
