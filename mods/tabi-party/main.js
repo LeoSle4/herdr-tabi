@@ -10,7 +10,7 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, spaces, settings, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
+import { agents, spaces, settings, home, run, openOverlay, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
 import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
@@ -180,6 +180,8 @@ export default class TabiParty extends View {
     }
     const done = await save({ ...rec, check: result });
     try { notify(checkNotice(done, result)); } catch { /* the mark on the card says it too */ }
+    // tabi-status takes it from here for the notices outside Herdr (desktop, phone).
+    try { setShared("tabi.check", { id: rec.id, state: result.state, name: rec.character ?? rec.agent, verify: rec.verify, tail: result.tail, at: result.at, address: agent?.address ?? null }); } catch { /* optional */ }
     return done;
   }
 
@@ -401,7 +403,14 @@ export default class TabiParty extends View {
   statusMark(a, s, accent, t) {
     const mark = checkMark(this.taskOf(a));
     const color = mark === "✓" ? PASS_COLOR : mark === "✗" ? FAIL_COLOR : t.dim;
+    const claude = String(a.program?.key ?? a.app ?? "").toLowerCase().startsWith("claude");
     return h_flex().gap(6).items_baseline().flex_none()
+      // Claude Code only: the dialog types /model or /effort into it (and says why it cannot when the agent is busy or on another machine).
+      .when(claude, (el) => el.child(div().id(`switch-${a.address}`).text_size(12).text_color(t.dim).cursor_pointer().hover((x) => x.text_color(t.foreground))
+        .tooltip("Cambiar el modelo o el esfuerzo de esta sesión")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click(() => openOverlay({ mod: "tabi-launch", kind: "dialog", width: 460, height: 520,
+          props: { mode: "switch", key: "claude", name: a.tab_name || a.address, pane: a.pane, address: a.address, status: a.status } })).child("⇄")))
       .when(Boolean(mark), (el) => el.child(div().text_size(12).text_color(color).child(mark)))
       .child(div().text_size(13).text_color(accent).child(s.kanji));
   }

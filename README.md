@@ -175,7 +175,7 @@ Subscribe to the topic in the ntfy app. All the options:
 | `desktop` | `true`: a system notification when Herdr is not the active window | off |
 | `topic` | The phone push: 8 to 64 letters, digits, `_` or `-`. On the public server the topic is the only secret, so keep it random | none (no push) |
 | `server` | Your own ntfy server (`https://` only) | `https://ntfy.sh` |
-| `on` | `["blocked", "done"]`, or just one of them | both |
+| `on` | `["blocked", "done", "check"]`, or some of them. `check` is the result of the command of a task (*Asignar tarea…*, "comprobar al terminar"; `docs/assign-task`) | all three |
 | `details` | `true`: the **phone** push carries the character and the first line of what the agent said. Off, it only says the program and the status | `false` |
 | `notifier` | macOS: `"osascript"` never uses `terminal-notifier` (text only, no portrait) | `"auto"` |
 | `debug` | `true`: writes what happens (a change noticed, whether the window was active, the exit code of the command) to `data/tabi/notify.log`, the last 80 lines. For finding out why nothing shows | `false` |

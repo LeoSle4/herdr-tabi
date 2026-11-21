@@ -111,3 +111,55 @@ export function summary(choice) {
   if (!choice.model) return `esfuerzo ${choice.effort}`;
   return choice.effort ? `${choice.model} · ${choice.effort}` : choice.model;
 }
+
+// --- Changing the model or the effort of an agent that is already running (only Claude Code, only on this macOS computer) ---
+// Claude Code has `/model <model>` and `/effort <level>` inside the session. tabi cannot press Enter for you, so it types the command into
+// the agent through the clipboard (terminal.paste) and you press Enter. The clipboard is put back as it was.
+
+const SLASH = /^\/(model|effort) [A-Za-z0-9][A-Za-z0-9._-]{0,59}$/;
+
+/** The command to type in Claude Code ("/model sonnet", "/effort high"), or null when the value could be anything but a name or a level. */
+export function slashCommand(kind, value) {
+  if (kind === "model") return SAFE_MODEL.test(String(value ?? "")) ? `/model ${value}` : null;
+  if (kind === "effort") return CLAUDE_EFFORTS.includes(value) ? `/effort ${value}` : null;
+  return null;
+}
+
+/** Can tabi type a command into this agent? { ok: true } or { ok: false, reason }. */
+export function canSwitch({ key, platform, address, status }) {
+  if (familyOf(key) !== "claude") return { ok: false, reason: "Solo para Claude Code (Codex cambia de modelo con su propio /model)" };
+  if (platform !== "macos") return { ok: false, reason: "Por ahora solo en macOS" };
+  if (String(address ?? "").includes("/")) return { ok: false, reason: "Solo en agentes de este equipo" };
+  if (status === "working") return { ok: false, reason: "El agente está trabajando: espera a que termine" };
+  if (status === "blocked") return { ok: false, reason: "El agente te espera: respóndele primero" };
+  return { ok: true };
+}
+
+/**
+ * Types `text` (a /model or /effort command) into the agent of `pane`: the clipboard is read, the command is put in it, the pane is
+ * focused and pasted into, and the clipboard is put back, whatever happens in between. `deps` are Herdr's exec and run and a wait(ms), so
+ * the order of the steps can be tested. Resolves { ok } or { ok: false, error }; it never rejects.
+ */
+export async function switchSession(deps, { pane, text, platform }) {
+  if (platform !== "macos") return { ok: false, error: "sin herramientas de portapapeles en esta plataforma" };
+  if (!SLASH.test(String(text ?? ""))) return { ok: false, error: "no es un comando /model o /effort" };
+  const write = (value) => deps.exec("sh", ["-c", 'printf %s "$1" | pbcopy', "sh", value], { timeout: 10000 });
+  let previous;
+  try {
+    previous = (await deps.exec("pbpaste", [], { timeout: 10000 })).stdout ?? "";
+  } catch (e) {
+    return { ok: false, error: `no pude leer el portapapeles: ${e?.message ?? e}` };
+  }
+  let error = null;
+  try {
+    await write(text);
+    deps.run("pane.focus", { pane });
+    await deps.wait(250);
+    deps.run("terminal.paste");
+    await deps.wait(300);
+  } catch (e) {
+    error = String(e?.message ?? e);
+  }
+  try { await write(previous.length > 200000 ? "" : previous); } catch { /* the clipboard keeps the command */ }
+  return error ? { ok: false, error } : { ok: true };
+}

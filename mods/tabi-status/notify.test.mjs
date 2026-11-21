@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, cardMessage, portraitOf, pushPayload, desktopCommand, FRESH_MS } from "./notify.js";
+import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, localMessage, cardMessage, portraitOf, pushPayload, desktopCommand, FRESH_MS, freshCheck, checkCard, checkPush } from "./notify.js";
 
 const agent = (address, status, extra = {}) => ({ address, status, app: "claude-code", space_name: "herdr-tabi", ...extra });
 const TOPIC = "tabi-0123456789ab";
 
 test("config: a topic is enough for the phone, the rest has defaults", () => {
-  assert.deepEqual(parseConfig(`{"topic":"${TOPIC}"}`), { server: "https://ntfy.sh", topic: TOPIC, desktop: false, on: ["blocked", "done"], details: false, notifier: "auto", debug: false });
+  assert.deepEqual(parseConfig(`{"topic":"${TOPIC}"}`), { server: "https://ntfy.sh", topic: TOPIC, desktop: false, on: ["blocked", "done", "check"], details: false, notifier: "auto", debug: false });
 });
 
 test("config: desktop alone is enough, with no topic", () => {
-  assert.deepEqual(parseConfig('{"desktop":true}'), { server: "https://ntfy.sh", topic: null, desktop: true, on: ["blocked", "done"], details: false, notifier: "auto", debug: false });
+  assert.deepEqual(parseConfig('{"desktop":true}'), { server: "https://ntfy.sh", topic: null, desktop: true, on: ["blocked", "done", "check"], details: false, notifier: "auto", debug: false });
   assert.equal(parseConfig('{"desktop":false}'), null);
   assert.equal(parseConfig('{"desktop":"yes"}'), null);
 });
@@ -182,4 +182,39 @@ test("parseCurl: the body and the status of what curl printed", () => {
   assert.deepEqual(parseCurl("\n000"), { code: 0, body: "" });
   assert.deepEqual(parseCurl(undefined), { code: 0, body: "" });
   assert.equal(parseCurl("x".repeat(500) + "\n200").body.length, 200); // an answer is cut for the log
+});
+
+const chk = (extra = {}) => ({ id: "t1", state: "pass", name: "Koyun", verify: "node --test", tail: "12 passed", at: 5000, address: "t1k", ...extra });
+
+test("config: 'check' is an event of its own, on by default and left out when `on` does not list it", () => {
+  assert.deepEqual(parseConfig('{"desktop":true,"on":["done","check","nope"]}').on, ["done", "check"]);
+  assert.deepEqual(parseConfig('{"desktop":true,"on":["done"]}').on, ["done"]);
+});
+
+test("freshCheck: a result newer than the last one seen; the first reading never counts", () => {
+  assert.equal(freshCheck(null, chk()), null); // Herdr just started: an old result is not news
+  assert.equal(freshCheck(4000, chk({ at: 5000 })).id, "t1");
+  assert.equal(freshCheck(5000, chk({ at: 5000 })), null); // already told
+  assert.equal(freshCheck(6000, chk({ at: 5000 })), null);
+});
+
+test("freshCheck: what is not a result is ignored", () => {
+  for (const bad of [undefined, null, "x", {}, chk({ state: "running" }), chk({ at: "now" }), chk({ name: "" })]) assert.equal(freshCheck(1, bad), null);
+});
+
+test("checkCard: the desktop notice says who, whether it passed and what the command printed", () => {
+  assert.deepEqual(checkCard(chk(), "/p/koyun.png"), { title: "Koyun: la comprobación pasó ✓", subtitle: "", body: "node --test · 12 passed", image: "/p/koyun.png" });
+  assert.equal(checkCard(chk({ state: "fail", tail: "2 failed" }), null).title, "Koyun: la comprobación falló ✗");
+  assert.equal(checkCard(chk({ tail: "" }), null).body, "node --test");
+});
+
+test("checkPush: without `details` nothing but the outcome leaves the machine; with it, the same text as the desktop", () => {
+  const off = checkPush({ topic: TOPIC, details: false }, chk());
+  assert.deepEqual(off, { topic: TOPIC, title: "Herdr: la comprobación pasó", message: "Una comprobación pasó", priority: 3 });
+  assert.equal(JSON.stringify(off).includes("node --test"), false);
+  assert.equal(JSON.stringify(off).includes("Koyun"), false);
+  const bad = checkPush({ topic: TOPIC, details: false }, chk({ state: "fail" }));
+  assert.deepEqual([bad.title, bad.message, bad.priority], ["Herdr: la comprobación falló", "Una comprobación falló", 4]);
+  const on = checkPush({ topic: TOPIC, details: true }, chk({ state: "fail" }));
+  assert.deepEqual(on, { topic: TOPIC, title: "Koyun: la comprobación falló ✗", message: "node --test · 12 passed", priority: 4 });
 });
