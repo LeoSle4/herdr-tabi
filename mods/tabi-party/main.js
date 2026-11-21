@@ -405,6 +405,15 @@ export default class TabiParty extends View {
     const color = mark === "✓" ? PASS_COLOR : mark === "✗" ? FAIL_COLOR : t.dim;
     const claude = String(a.program?.key ?? a.app ?? "").toLowerCase().startsWith("claude");
     return h_flex().gap(6).items_baseline().flex_none()
+      // A card with a task: go on with it in another agent (same space and folder), when this one ran out of quota or got stuck.
+      .when(Boolean(this.taskOf(a)), (el) => el.child(div().id(`handoff-${a.address}`).text_size(12).text_color(t.dim).cursor_pointer().hover((x) => x.text_color(t.foreground))
+        .tooltip("Continuar esta tarea con otro agente")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click(() => {
+          const rec = this.taskOf(a);
+          openOverlay({ mod: "tabi-launch", kind: "dialog", width: 460, height: 560,
+            props: { mode: "handoff", rec, from: rec.character ?? rec.agent, space: a.space, folder: verifyDir(rec, this.spaceOf(a)?.folder), machine: this.machineOf(a) } });
+        }).child("継")))
       // Claude Code only: the dialog types /model or /effort into it (and says why it cannot when the agent is busy or on another machine).
       .when(claude, (el) => el.child(div().id(`switch-${a.address}`).text_size(12).text_color(t.dim).cursor_pointer().hover((x) => x.text_color(t.foreground))
         .tooltip("Cambiar el modelo o el esfuerzo de esta sesión")
