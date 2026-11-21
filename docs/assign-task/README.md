@@ -12,10 +12,13 @@ first message. That is Herdr's own `tab.new {name, space, folder, argv, task}`; 
 
 ## The character
 
-The card of an agent wears the portrait it was given when it appeared. The dialog tells `tabi-party` which one you picked
-(`shared("tabi.next-portrait")`), and the next agent that appears gets it:
+The card of an agent wears the portrait it was given when it appeared. The dialog names the new tab after the character and tells
+`tabi-party` which one you picked (`shared("tabi.next-portrait")`). `tabi-party` gives it to the agent **in the tab with that
+name** that has no portrait yet, and to no other:
 
-- The choice is valid for 20 seconds and is used once.
+- The choice is valid for 30 seconds and is used once.
+- It is tied to the tab, not to "the next agent that appears": an agent of another machine that reconnects at that moment also
+  has no portrait, and with the first version of this it took the one you chose.
 - If the character is already on another live agent, or the agent takes longer than that to appear, it gets a random one like
   any other.
 - With "Al azar" nothing changes: the agent gets a portrait nobody wears, as before.
