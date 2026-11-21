@@ -75,5 +75,9 @@ ECOSISTEMA.md
 # --- gentle-ai writes its skill registry in every project where an agent runs ---
 /.atl/
 
+# --- Local tooling state: code index and feature notes ---
+/.codegraph/
+/odd/
+
 # --- Local publishing scripts ---
 /.pr/

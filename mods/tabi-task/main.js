@@ -1,11 +1,13 @@
 // tabi-task: "Asignar tarea…" of the "+" menu. A dialog to give a task to an agent: what to do, which agent runs it (Claude Code, a
-// second account, Codex...) and which character it is. Confirming opens a tab named after the character, in the current folder,
-// with the agent running and the task as its first message (tab.new {name, space, folder, argv, task}). The character is passed
-// to tabi-party (shared "tabi.next-portrait") so the agent that appears wears that portrait.
+// second account, Codex...), which character it is and, optionally, a worktree of its own. Confirming opens a tab named after the
+// character, in the current folder, with the agent running and the task as its first message (tab.new {name, space, folder, argv,
+// task}); with the worktree box, Herdr's worktree dialog creates a branch and a checkout and opens the agent there with the task as
+// the last argument of its command. The character is passed to tabi-party (shared "tabi.next-portrait") so the agent that appears
+// wears that portrait.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, theme, knownAgents, shared, setShared, checking } from "herdr";
-import { agentChoices, characterChoices, rows, buildLaunch } from "./lib.js";
+import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, checking, window as herdrWindow } from "herdr";
+import { agentChoices, characterChoices, rows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt } from "./lib.js";
 
 const PORTRAIT = 34;
 const PER_ROW = 5;
@@ -16,6 +18,8 @@ export default class TabiTask extends View {
     this.task = "";
     this.agent = null; // the chosen agent's key; the first one until the person picks
     this.character = null; // the chosen portrait's file; null = whoever comes (automatic)
+    this.worktree = false; // the box "En un worktree nuevo"
+    this.branchId = Math.random().toString(16).slice(2, 6); // the same all along the dialog, so the branch shown is the one made
     this.known = [];
     this.failed = false;
     this.input = InputState.new({ value: "" });
@@ -43,6 +47,15 @@ export default class TabiTask extends View {
     const choices = this.choices();
     const agent = choices.find((a) => a.key === this.agent) ?? choices[0];
     const character = characterChoices(shared("tabi.portraits")).find((c) => c.file === this.character) ?? null;
+    if (this.worktree && worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine }).ok) {
+      const branch = branchFor(character, agent, this.branchId);
+      const wt = buildWorktree({ task: this.task, agent, character, space: p.space, folder: p.folder, machine: p.machine, branch });
+      if (!wt) return;
+      if (wt.portrait) setShared("tabi.next-portrait", { file: wt.portrait, at: Date.now() });
+      closeOverlay(p.overlay);
+      openOverlay(wt.overlay);
+      return;
+    }
     const launch = buildLaunch({ task: this.task, agent, character, space: p.space, folder: p.folder });
     if (!launch) return;
     if (launch.portrait) setShared("tabi.next-portrait", { file: launch.portrait, at: Date.now() });
@@ -74,6 +87,19 @@ export default class TabiTask extends View {
       .child(div().w_full().truncate().text_size(11).text_color(selected ? t.foreground : t.dim).child(c.name));
   }
 
+  /** The box "En un worktree nuevo": the task gets its own branch and folder. Dim and inert where it cannot be offered. */
+  worktreeBox(t, available, note) {
+    const on = this.worktree && available.ok;
+    const box = div().w(16).h(16).flex_none().rounded(4).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
+      .flex().items_center().justify_center().text_size(11).text_color(t.solid_foreground).child(on ? "✓" : "");
+    return h_flex().id("task-worktree").pt(14).gap(10).items_center().when(!available.ok, (el) => el.opacity(0.5))
+      .when(available.ok, (el) => el.cursor_pointer().hover((x) => x.opacity(0.88)).on_click((_e, cx) => { this.worktree = !this.worktree; cx.notify(); }))
+      .child(box)
+      .child(v_flex().flex_1().min_w(0).gap(2)
+        .child(div().text_size(12.5).text_color(t.foreground).child("En un worktree nuevo"))
+        .child(div().text_size(11).text_color(t.dim).child(available.ok ? note : available.reason)));
+  }
+
   button(id, text, primary, action, t) {
     return h_flex().id(id).h(32).px(14).items_center().rounded(8)
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
@@ -89,6 +115,11 @@ export default class TabiTask extends View {
     const chosen = choices.find((a) => a.key === this.agent) ?? choices[0];
     const characters = characterChoices(shared("tabi.portraits"));
     const where = String(p.folder ?? "").split(/[\\/]/).filter(Boolean).pop();
+    const available = worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine });
+    const picked = characters.find((c) => c.file === this.character) ?? null;
+    const branch = branchFor(picked, chosen, this.branchId);
+    const note = !this.worktree ? "Su propia rama y carpeta, para que no pise tu trabajo"
+      : `Rama ${branch}${this.task.trim() && chosen && !acceptsPrompt(chosen) ? ". Este agente no recibe la tarea solo: escríbela en su pestaña" : ""}`;
     const faces = [{ file: null, name: "Al azar", thumb: null }, ...characters];
     const agentRows = rows(choices, 3);
     const faceRows = rows(faces, PER_ROW);
@@ -100,6 +131,7 @@ export default class TabiTask extends View {
       .child(label("¿Qué hay que hacer?"))
       .child(Input.new(this.input).h(36).px(10).rounded(9).border_1().border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground))
       .child(div().pt(6).text_size(11.5).text_color(t.dim).child(where ? `Se abre en «${where}». Sin texto, solo abre el agente.` : "Sin texto, solo abre el agente."))
+      .child(this.worktreeBox(t, available, note))
       .child(label("Agente"))
       .children(choices.length
         ? agentRows.map((row, r) => h_flex().gap(8).pb(r < agentRows.length - 1 ? 8 : 0)
