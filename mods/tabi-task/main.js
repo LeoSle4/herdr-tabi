@@ -6,13 +6,17 @@
 // wears that portrait.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, checking, window as herdrWindow } from "herdr";
-import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt } from "./lib.js";
+import * as fs from "fs/promises";
+import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, appHome, checking, window as herdrWindow } from "herdr";
+import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt, newTaskRecord, coverFor, fadeSteps } from "./lib.js";
 
 const PORTRAIT = 40; // the picture of a character; its ring makes it 48
-const FACE_W = 64; // one character: ring, name
 const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
 const AGENTS_PER_ROW = 3;
+const COVER_W = 680; // the cover picture is wider than any dialog it is shown in, and the dialog cuts it
+const COVER_H = 128;
+const FADE_BANDS = 9;
+const FADE_BAND_H = 7;
 
 export default class TabiTask extends View {
   init(_props, cx) {
@@ -23,6 +27,8 @@ export default class TabiTask extends View {
     this.worktree = false; // the box "En un worktree nuevo"
     this.known = [];
     this.failed = false;
+    this.cover = null; // the picture of the cover (relative to the app home), or null
+    this.covers = { map: {}, images: [] };
     this.input = InputState.new({ value: "" });
     this.input.on("change", (_e, cx) => { this.task = this.input.value(); cx.notify(); });
     this.input.on("submit", () => this.submit());
@@ -33,6 +39,14 @@ export default class TabiTask extends View {
     cx.timer.after(600, () => this.input.focus());
     this.handle = cx.focus_handle();
     if (checking()) return;
+    cx.spawn(async (cx) => {
+      try {
+        this.covers.map = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/space-backdrops.json`, "utf8")).spaces ?? {};
+        this.covers.images = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/backdrops.json`, "utf8")).images ?? [];
+      } catch { /* no pictures yet: the dialog has no cover */ }
+      this.cover = coverFor(this.covers.map, this.covers.images, p.space);
+      cx.notify();
+    });
     cx.spawn(async (cx) => {
       try { this.known = await knownAgents({ on: p.machine ?? null }); } catch { this.failed = true; }
       cx.notify();
@@ -48,6 +62,20 @@ export default class TabiTask extends View {
     try { return spaces().map((x) => x.branch).filter(Boolean); } catch { return []; }
   }
 
+  /** Saves what was asked in data/tabi/tasks/<id>.json (tabi-party links it to the agent's card). Never gets in the way of the launch. */
+  record(agent, character, branch) {
+    const p = props() ?? {};
+    const rec = newTaskRecord({ task: this.task, agent, character, branch, folder: p.folder, machine: p.machine, now: Date.now(), rnd: Math.random().toString(16).slice(2, 6) });
+    if (!rec) return;
+    const dir = `${appHome()}/data/tabi/tasks`;
+    (async () => {
+      try {
+        await fs.mkdir(dir, { recursive: true });
+        await fs.writeFile(`${dir}/${rec.id}.json`, JSON.stringify(rec));
+      } catch { /* the task still runs without its record */ }
+    })();
+  }
+
   submit() {
     const p = props() ?? {};
     const choices = this.choices();
@@ -57,6 +85,7 @@ export default class TabiTask extends View {
       const branch = branchFor(character, agent, this.task, this.takenBranches());
       const wt = buildWorktree({ task: this.task, agent, character, space: p.space, folder: p.folder, machine: p.machine, branch });
       if (!wt) return;
+      this.record(agent, character, branch);
       if (wt.portrait) setShared("tabi.next-portrait", { file: wt.portrait, at: Date.now() });
       closeOverlay(p.overlay);
       openOverlay(wt.overlay);
@@ -64,6 +93,7 @@ export default class TabiTask extends View {
     }
     const launch = buildLaunch({ task: this.task, agent, character, space: p.space, folder: p.folder });
     if (!launch) return;
+    this.record(agent, character, null);
     if (launch.portrait) setShared("tabi.next-portrait", { file: launch.portrait, at: Date.now() });
     closeOverlay(p.overlay);
     run(launch.command, launch.args);
@@ -97,7 +127,7 @@ export default class TabiTask extends View {
       .when(Boolean(c.thumb), (el) => el.child(svg("mods/tabi-party/circle-mask.svg").absolute().top(0).left(0).w(PORTRAIT).h(PORTRAIT).text_color(selected ? t.selected : t.popover)));
     const ring = div().w(PORTRAIT + 8).h(PORTRAIT + 8).flex_none().rounded_full().flex().items_center().justify_center()
       .border_1().border_color(selected ? t.accent : t.border).bg(selected ? t.selected : t.popover).child(picture);
-    return v_flex().id(`face-${c.file ?? "auto"}`).w(FACE_W).flex_none().items_center().gap(6).cursor_pointer()
+    return v_flex().id(`face-${c.file ?? "auto"}`).flex_1().min_w(0).items_center().gap(6).cursor_pointer()
       .hover((s) => s.opacity(0.88)).on_click(onClick)
       .child(ring)
       .child(h_flex().w_full().justify_center().child(div().truncate().text_size(11).text_color(selected ? t.foreground : t.dim).child(c.name)));
@@ -127,6 +157,24 @@ export default class TabiTask extends View {
       .hover((s) => s.opacity(0.88)).on_click(action).child(text);
   }
 
+  /**
+   * The cover: the picture of the space, as wide as the dialog and cut to its height (the engine has no "cover" fit, so the picture is
+   * as wide as the dialog, at its own proportion, and the excess falls outside the box), a dark layer so the title reads, bands that
+   * melt its bottom into the dialog, and the title over it.
+   */
+  coverBox(t) {
+    const picH = Math.round(COVER_W * 9 / 16);
+    const fade = fadeSteps(t.popover, FADE_BANDS);
+    return div().relative().w_full().h(COVER_H).flex_none().overflow_hidden().bg(t.raised)
+      .when(Boolean(this.cover), (el) => el.child(image(this.cover).absolute().top(-Math.round((picH - COVER_H) * 0.4)).left(0).w(COVER_W).h(picH)))
+      .child(div().absolute().top(0).left(0).w_full().h(COVER_H).bg("#00000066"))
+      .children(fade.map((c, i) => div().absolute().top(COVER_H - (FADE_BANDS - i) * FADE_BAND_H).left(0).w_full().h(FADE_BAND_H).bg(c)))
+      .child(div().absolute().top(14).right(20).text_size(11).text_color("#ffffffb3").child("Esc"))
+      .child(h_flex().absolute().top(COVER_H - 66).left(22).gap(10).items_baseline()
+        .child(div().text_size(22).text_color("#ffffffcc").child("任務"))
+        .child(div().text_size(20).font_semibold().text_color("#ffffff").child("Asignar tarea")));
+  }
+
   render() {
     const t = theme();
     const p = props() ?? {};
@@ -144,13 +192,9 @@ export default class TabiTask extends View {
     // A short row is filled with empty cells (null), so every cell keeps its width and the grid stays even.
     const pad = (row, size) => [...row, ...Array.from({ length: size - row.length }, () => null)];
     return v_flex().id("tabi-task").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
-      .w_full().min_h(0).px(20).pt(18).pb(20).bg(t.popover).text_color(t.foreground)
-      .child(h_flex().items_center()
-        .child(h_flex().flex_1().gap(10).items_baseline()
-          .child(div().text_size(18).text_color(t.muted).child("任務"))
-          .child(div().text_size(15).font_semibold().child("Asignar tarea")))
-        .child(div().text_size(11).text_color(t.dim).child("Esc")))
-      .child(v_flex().pt(14).child(div().h(0.5).w_full().bg(t.border)))
+      .w_full().min_h(0).bg(t.popover).text_color(t.foreground)
+      .child(this.coverBox(t))
+      .child(v_flex().w_full().px(20).pb(20)
       .child(this.section("内容", "qué hay que hacer", t))
       .child(Input.new(this.input).h(38).px(12).rounded(9).border_1().border_color(this.inputFocused ? t.accent : t.border).bg(t.background).text_size(12.8).text_color(t.foreground))
       .child(div().pt(6).text_size(11).font_light().text_color(t.dim).child(where ? `Se abre en «${where}». Sin texto, solo abre el agente.` : "Sin texto, solo abre el agente."))
@@ -163,11 +207,11 @@ export default class TabiTask extends View {
             ? this.chip(`agent-${a.key}`, a.name, chosen?.key === a.key, (_e, cx) => { this.agent = a.key; cx.notify(); }, t) : div().flex_1()))))
         : div().text_size(11.5).font_light().text_color(t.dim).child(this.failed ? "No se pudo comprobar qué agentes hay instalados" : "Buscando agentes…"))
       .child(this.section("人物", "personaje", t))
-      .child(v_flex().gap(10).children(faces.map((row) => h_flex().w_full().justify_between()
+      .child(v_flex().gap(10).children(faces.map((row) => h_flex().w_full()
         .children(pad(row, faces[0].length).map((c) => c
-          ? this.face(c, (c.file ?? null) === this.character, t, (_e, cx) => { this.character = c.file ?? null; cx.notify(); }) : div().w(FACE_W).flex_none())))))
+          ? this.face(c, (c.file ?? null) === this.character, t, (_e, cx) => { this.character = c.file ?? null; cx.notify(); }) : div().flex_1().min_w(0))))))
       .child(h_flex().pt(22).gap(10)
         .child(this.button("task-cancel", "Cancelar", false, () => closeOverlay(p.overlay), t))
-        .child(this.button("task-go", "Lanzar", true, () => this.submit(), t)));
+        .child(this.button("task-go", "Lanzar", true, () => this.submit(), t))));
   }
 }
