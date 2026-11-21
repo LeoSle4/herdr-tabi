@@ -154,8 +154,14 @@ export default class TabiPanel extends View {
     const waiting = pending(list);
     const names = accountNames(list);
     const card = this.card("tabi-now", "今", "ahora", t, waiting.length ? AMBER_SOFT : t.border);
-    if (!waiting.length) return card.child(div().text_size(11.5).font_light().text_color(t.dim).child("nada pendiente"));
+    const review = shared("tabi.review") ?? 0; // finished tasks nobody has looked at (tabi-party counts them)
+    if (!waiting.length) card.child(div().text_size(11.5).font_light().text_color(t.dim).child("nada pendiente"));
     for (const a of waiting) card.child(this.answer(a, names, t));
+    if (review > 0) {
+      card.child(div().id("tabi-review-link").text_size(11.5).text_color(t.accent).cursor_pointer().hover((x) => x.opacity(0.8))
+        .on_click(() => openOverlay({ mod: "tabi-review", kind: "dialog", width: 560, height: 640 }))
+        .child(`${review} ${review === 1 ? "tarea por revisar" : "tareas por revisar"} ›`));
+    }
     return card;
   }
 
