@@ -130,11 +130,13 @@ export function reconcilePortraits(files, liveIds, current, random = Math.random
     if (files.includes(f) && !firstHolder.has(f)) firstHolder.set(f, id);
   }
   for (const [f, id] of firstHolder) next[id] = f;
-  // The character picked in "Asignar tarea…" goes to the first agent that has none yet, and only if nobody wears it.
-  let wanted = prefer && files.includes(prefer) && !Object.values(next).includes(prefer) ? prefer : null;
+  // The character picked in "Asignar tarea…" is for one agent, named by `prefer.id`: never for "whoever has none", or an agent of
+  // another machine that has just reconnected would take it. It only counts if that agent has none yet and nobody wears the file.
+  if (prefer && files.includes(prefer.file) && liveIds.includes(prefer.id) && !next[prefer.id] && !Object.values(next).includes(prefer.file)) {
+    next[prefer.id] = prefer.file;
+  }
   for (const id of liveIds) {
     if (next[id]) continue;
-    if (wanted) { next[id] = wanted; wanted = null; continue; }
     next[id] = pickPortrait(files, Object.values(next), random);
   }
   return next;

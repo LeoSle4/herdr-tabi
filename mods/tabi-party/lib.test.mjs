@@ -141,20 +141,25 @@ test("card name: the character with a portrait, the account without one", () => 
   assert.equal(cardName("", "codex"), "codex");
 });
 
-test("reconcilePortraits: the preferred character goes to the first agent without one", () => {
+
+test("reconcilePortraits: the preferred character goes to the agent it was asked for", () => {
   const files = ["a.png", "b.png", "c.png"];
-  const next = reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, "c.png");
+  const next = reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, { file: "c.png", id: "new" });
   assert.deepEqual(next, { old: "a.png", new: "c.png" });
 });
 
-test("reconcilePortraits: the preferred one is ignored when somebody already wears it, or it is not a portrait", () => {
-  const files = ["a.png", "b.png"];
-  assert.equal(reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, "a.png").new, "b.png");
-  assert.equal(reconcilePortraits(files, ["new"], {}, () => 0, "zzz.png").new, "a.png");
+test("reconcilePortraits: another agent without a portrait never takes it (an agent of another machine that reconnects)", () => {
+  const files = ["a.png", "b.png", "c.png"];
+  // "remote" comes first in the list and has none: it must get a random one, and the asked character stays for "new"
+  const next = reconcilePortraits(files, ["remote", "new"], {}, () => 0, { file: "c.png", id: "new" });
+  assert.equal(next.new, "c.png");
+  assert.notEqual(next.remote, "c.png");
 });
 
-test("reconcilePortraits: only one agent gets the preferred character", () => {
-  const next = reconcilePortraits(["a.png", "b.png", "c.png"], ["x", "y"], {}, () => 0, "c.png");
-  assert.equal(next.x, "c.png");
-  assert.notEqual(next.y, "c.png");
+test("reconcilePortraits: the preferred one is ignored when the agent is gone, has one already, somebody wears it, or it is no portrait", () => {
+  const files = ["a.png", "b.png"];
+  assert.notEqual(reconcilePortraits(files, ["x"], {}, () => 0, { file: "b.png", id: "gone" }).x, "b.png"); // that agent is not alive
+  assert.equal(reconcilePortraits(files, ["x"], { x: "a.png" }, () => 0, { file: "b.png", id: "x" }).x, "a.png"); // it keeps its own
+  assert.equal(reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, { file: "a.png", id: "new" }).new, "b.png"); // worn
+  assert.equal(reconcilePortraits(files, ["new"], {}, () => 0, { file: "zzz.png", id: "new" }).new, "a.png"); // not a portrait
 });

@@ -235,11 +235,16 @@ export default class TabiParty extends View {
     if (list.length) this.sawAgents = true;
     // At start the list can be empty for a moment: the saved assignments are kept until agents have been seen.
     if (!list.length && !this.sawAgents) return;
-    // "Asignar tarea…" asks for a character for the agent it is about to start: valid for a short while, used once.
+    // "Asignar tarea…" asks for a character for the agent it is about to start. That agent is the one in the tab named like the
+    // character (the dialog names the tab after it) that has no portrait yet: not "whoever has none", which could be an agent of
+    // another machine that has just reconnected. Valid for 30 s and used once.
     const wish = shared("tabi.next-portrait");
-    const prefer = wish && Date.now() - wish.at < 20000 ? wish.file : null;
+    const fresh = wish && Date.now() - wish.at < 30000;
+    const target = fresh ? list.find((x) => !this.assign[this.idOf(x)] && x.tab_name === characterName(wish.file)) : null;
+    const prefer = target ? { file: wish.file, id: this.idOf(target) } : null;
     const next = reconcilePortraits([...this.thumbs.keys()], list.map((x) => this.idOf(x)), this.assign, Math.random, prefer);
-    if (wish && (!prefer || Object.values(next).includes(prefer) && !Object.values(this.assign).includes(prefer))) {
+    // The wish is spent when it was given, or when it expired. While the agent has not appeared yet it waits.
+    if (wish && (!fresh || (prefer && next[prefer.id] === prefer.file))) {
       cx.spawn(async () => { setShared("tabi.next-portrait", null); });
     }
     if (JSON.stringify(next) === JSON.stringify(this.assign)) return;
