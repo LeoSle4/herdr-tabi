@@ -114,3 +114,47 @@ export function buildWorktree({ task, agent, character, space, folder, machine, 
   const props = { space, folder, machine: machine ?? null, branch, tab: character?.name ?? agent.name, argv: taskSent ? [...agent.argv, text] : [...agent.argv] };
   return { overlay: { mod: "worktree", kind: "dialog", width: 460, height: 150, props }, portrait: character?.file ?? null, taskSent };
 }
+
+/** The name Herdr gives the tab of a task: the character, else the agent. tabi-party links the record to its agent by this name. */
+export function tabName(character, agent) {
+  return character?.name ?? agent?.name;
+}
+
+/** The name of a record's file: the time (so a listing sorts by it) and four random characters; never anything that is a path. */
+export function taskId(now, rnd) {
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  return `${stamp}-${String(rnd ?? "").toLowerCase().replace(/[^0-9a-z]/g, "").slice(0, 8) || "0000"}`;
+}
+
+/**
+ * What is saved in data/tabi/tasks/<id>.json when a task is given: what was asked, who does it and where. tabi-party finishes it (status,
+ * result) when the agent does. Null when nothing was asked (the dialog only opens the agent) or there is no agent.
+ */
+export function newTaskRecord({ task, agent, character, branch, folder, machine, now, rnd }) {
+  const text = String(task ?? "").trim().slice(0, 500);
+  if (!text || !agent) return null;
+  return { id: taskId(now, rnd), task: text, agent: agent.name, agentKey: agent.key, character: character?.name ?? null, tab: tabName(character, agent),
+    branch: branch ?? null, folder: folder ?? null, machine: machine ?? null, startedAt: now, status: "running", finishedAt: null, result: null };
+}
+
+/**
+ * The picture for the cover of the dialog: the one tabi-backdrop gave the space it opens in (`map`: space id -> file), else the first
+ * one there is. Only a file of the list is ever used (`images`: [{ file }]); null when there are none.
+ */
+export function coverFor(map, images, space) {
+  const files = (images ?? []).map((i) => i.file).filter((f) => typeof f === "string");
+  const own = map?.[space];
+  return files.includes(own) ? own : files[0] ?? null;
+}
+
+/**
+ * Bands of one color, from almost clear to solid, to put at the bottom of a picture so it melts into the dialog (the engine has no
+ * gradient for an element's background). `color` is "#rrggbb"; anything else gives no bands.
+ */
+export function fadeSteps(color, count) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(color ?? "")) || !(count > 0)) return [];
+  return Array.from({ length: count }, (_, i) => {
+    const alpha = Math.round(255 * ((i + 1) / count) ** 1.6);
+    return `${color.toLowerCase()}${alpha.toString(16).padStart(2, "0")}`;
+  });
+}

@@ -14,7 +14,7 @@ first message. That is Herdr's own `tab.new {name, space, folder, argv, task}`; 
 
 The box **En un worktree nuevo** gives the task its own branch and folder, so the agent cannot step on what you are doing in the project:
 
-- Herdr's own worktree dialog does the work: it creates the branch `tabi/<character or agent>-<4 characters>` from where you are and a
+- Herdr's own worktree dialog does the work: it creates the branch `tabi/<character or agent>-<first words of the task>` (for example `tabi/koyun-di-hola-en-una`; a number is added only if that branch already exists) from where you are and a
   checkout in `~/Projects/worktrees/<repo>/<branch>` (the folder of the `worktrees.directory` setting), and opens a space there with a
   first tab named after the character and the agent running.
 - The task is not sent as a message: Herdr's dialog does not forward one. It goes as the **last argument of the agent's command**
@@ -41,6 +41,24 @@ name** that has no portrait yet, and to no other:
 
 With the hooks installed (`docs/subagents/README.md`), the card shows the character's sub-agents and its notification says what it
 did, so the task you assign can be followed from the cards.
+
+## The cover
+
+The dialog opens with a cover: the picture of the space you are in (the same one behind the window; `docs` of tabi-backdrop), the
+title over it and a fade into the dialog. With no pictures there is no cover.
+
+## The record of a task
+
+When you give a task (the field is not empty), a file is saved in `data/tabi/tasks/<date>-<time>-<4 characters>.json`: what you asked,
+the agent, the character, the branch (with a worktree), the folder and the machine. It outlives the session.
+
+- **The card shows it.** Hover the card of the agent: "Encargo: <what you asked>", and when it ends, "Resultado: <the first line of its
+  last answer>" (that line comes from the hooks, `docs/subagents/README.md`; without them it only says "Terminó").
+- **It is tied to the tab by its name** (the character's, or the agent's), on that machine, and only for 24 hours: a tab you open
+  tomorrow with the same name is not about this task.
+- **It ends when the agent does**: when it is "terminó", or at rest after being seen working. It never ends in the first 20 seconds,
+  and if two tabs share the name it waits for all of them, so a task is closed late rather than too soon.
+- Only the last 60 records are read. Delete a file to delete its record.
 
 ## Limits
 

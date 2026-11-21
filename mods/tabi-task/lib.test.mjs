@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
+import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, tabName, taskId, newTaskRecord, coverFor, fadeSteps, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
 
 const known = [
   { key: "claude", name: "Claude Code", run: ["claude"], installed: true },
@@ -160,4 +160,69 @@ test("branchFor: a number is added only when the branch already exists, and only
 
 test("branchFor: an existing branch of somebody else never decides the name by prefix", () => {
   assert.equal(branchFor({ name: "Mai" }, null, "arregla", ["tabi/mai-arregla-todo"]), "tabi/mai-arregla"); // different branch, same start
+});
+
+const claude = { key: "claude", name: "Claude Code", argv: ["claude"] };
+
+test("tabName: the character when there is one, else the agent: the name Herdr gives the tab", () => {
+  assert.equal(tabName({ name: "Koyun" }, claude), "Koyun");
+  assert.equal(tabName(null, claude), "Claude Code");
+});
+
+test("taskId: a file name that sorts by time and cannot escape its folder", () => {
+  const id = taskId(Date.UTC(2026, 10, 21, 14, 5, 9), "a1b2");
+  assert.equal(id, "20261121-140509-a1b2");
+  assert.match(id, /^[0-9a-z-]+$/);
+  assert.match(taskId(0, "../x"), /^[0-9a-z-]+$/);
+});
+
+test("newTaskRecord: what was asked, who does it and where, ready to be saved", () => {
+  const r = newTaskRecord({ task: "  di hola en una línea  ", agent: claude, character: { name: "Koyun" }, branch: "tabi/koyun-di-hola", folder: "/h/p", machine: null, now: 5000, rnd: "ffff" });
+  assert.equal(r.task, "di hola en una línea");
+  assert.deepEqual([r.agent, r.agentKey, r.character, r.tab], ["Claude Code", "claude", "Koyun", "Koyun"]);
+  assert.deepEqual([r.branch, r.folder, r.machine], ["tabi/koyun-di-hola", "/h/p", null]);
+  assert.deepEqual([r.status, r.startedAt, r.finishedAt, r.result], ["running", 5000, null, null]);
+  assert.equal(r.id, taskId(5000, "ffff"));
+});
+
+test("newTaskRecord: no record when nothing was asked or there is no agent", () => {
+  assert.equal(newTaskRecord({ task: "   ", agent: claude, now: 1 }), null);
+  assert.equal(newTaskRecord({ task: undefined, agent: claude, now: 1 }), null);
+  assert.equal(newTaskRecord({ task: "x", agent: null, now: 1 }), null);
+});
+
+test("newTaskRecord: a very long task is cut, and without character or branch the record says so", () => {
+  const r = newTaskRecord({ task: "a".repeat(2000), agent: claude, now: 1, rnd: "0000" });
+  assert.equal(r.task.length, 500);
+  assert.deepEqual([r.character, r.tab, r.branch, r.folder, r.machine], [null, "Claude Code", null, null, null]);
+});
+
+test("coverFor: the picture of the space the dialog opens in, else the first one there is", () => {
+  const images = [{ file: "backgrounds/tabi/01.jpg" }, { file: "backgrounds/tabi/02.jpg" }];
+  const map = { spA: "backgrounds/tabi/02.jpg" };
+  assert.equal(coverFor(map, images, "spA"), "backgrounds/tabi/02.jpg");
+  assert.equal(coverFor(map, images, "spB"), "backgrounds/tabi/01.jpg");
+  assert.equal(coverFor(undefined, images, undefined), "backgrounds/tabi/01.jpg");
+});
+
+test("coverFor: no picture at all means no cover, and a path that is not in the list is never used", () => {
+  assert.equal(coverFor({}, [], "spA"), null);
+  assert.equal(coverFor(undefined, undefined, "spA"), null);
+  assert.equal(coverFor({ spA: "../../etc/passwd" }, [{ file: "backgrounds/tabi/01.jpg" }], "spA"), "backgrounds/tabi/01.jpg");
+});
+
+test("fadeSteps: bands of the dialog's color that go from clear to solid, to melt a picture into it", () => {
+  const f = fadeSteps("#1c2129", 4);
+  assert.equal(f.length, 4);
+  assert.match(f[0], /^#1c2129[0-9a-f]{2}$/);
+  const alphas = f.map((c) => parseInt(c.slice(7), 16));
+  assert.deepEqual([...alphas].sort((a, b) => a - b), alphas); // never gets clearer
+  assert.equal(alphas[alphas.length - 1], 255); // the last one is the color itself
+  assert.ok(alphas[0] > 0 && alphas[0] < 255);
+});
+
+test("fadeSteps: a color that is not #rrggbb gives no fade rather than a broken one", () => {
+  assert.deepEqual(fadeSteps("red", 4), []);
+  assert.deepEqual(fadeSteps(undefined, 4), []);
+  assert.deepEqual(fadeSteps("#1c2129", 0), []);
 });

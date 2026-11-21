@@ -12,13 +12,14 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, settings, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
 const thumbDir = () => `${appHome()}/data/tabi/portraits`;
 const assignFile = () => `${appHome()}/data/tabi/portraits.json`;
 // Where the Claude Code hook (tools/tabi_subagents.py) writes one folder per terminal id, one JSON file per sub-agent.
+const tasksDir = () => `${appHome()}/data/tabi/tasks`;
 const subagentRoot = () => `${home()}/.local/state/tabi/subagents`;
 const num = (text, key) => Number(new RegExp(`${key}:\\s*(\\d+)`).exec(text)?.[1]);
 // Windows has no sips, stat or file: portraits.ps1 (PowerShell, System.Drawing) lists the folder and cuts the thumbnails.
@@ -54,6 +55,9 @@ export default class TabiParty extends View {
     this.ignored = ""; // the ignored files last reported
     this.subs = {}; // agent address (this machine's terminals only) -> the records of its sub-agents
     this.subsKey = "";
+    this.tasks = []; // the records of data/tabi/tasks, newest first
+    this.tasksKey = "";
+    this.worked = new Set(); // ids of the tasks whose agent was seen working
     if (checking()) return;
     cx.spawn(async (cx) => {
       try { this.assign = JSON.parse(await fs.readFile(assignFile(), "utf8")); } catch { /* none yet */ }
@@ -64,6 +68,7 @@ export default class TabiParty extends View {
     cx.timer.every(6000, (cx) => cx.spawn(async (cx) => { if (await this.detect()) cx.notify(); }));
     // Sub-agents: re-read every 3 s; redraw when something changed or while one runs (its elapsed time moves).
     cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { if ((await this.loadSubs()) || this.runningSubs()) cx.notify(); }));
+    cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { if (await this.loadTasks()) cx.notify(); }));
     cx.spawn(async (cx) => { if (await this.detect()) cx.notify(); });
   }
 
@@ -112,6 +117,52 @@ export default class TabiParty extends View {
     this.subs = next;
     this.subsKey = key;
     return changed;
+  }
+
+  /** Reads the task records and closes those whose agent has finished (done, with what it said last). Resolves true when something changed. */
+  async loadTasks() {
+    let names;
+    try { names = (await fs.readdir(tasksDir())).filter((n) => n.endsWith(".json")).sort().reverse().slice(0, 60); } catch { return false; }
+    const records = [];
+    for (const name of names) {
+      try {
+        const rec = parseTask(await fs.readFile(`${tasksDir()}/${name}`, "utf8"));
+        if (rec) records.push(rec);
+      } catch { /* removed while reading */ }
+    }
+    const now = Date.now();
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      if (rec.status === "done") continue;
+      // Two tabs can share a name: the task ends only when every agent with that name has ended (late, never too soon).
+      const mine = agents().filter((x) => taskFor([rec], x.tab_name, this.machineOf(x), now));
+      if (!mine.length) continue;
+      if (mine.some((x) => x.status === "working")) this.worked.add(rec.id);
+      if (!mine.every((x) => taskEnded(x.status, this.worked.has(rec.id), rec, now))) continue;
+      const a = mine[0];
+      let said = null;
+      if (!a.address.includes("/")) {
+        try { said = parseStop(await fs.readFile(`${subagentRoot()}/${a.address}/_stop.json`, "utf8")); } catch { /* the hook has not written it */ }
+      }
+      const done = finishTask(rec, said, now);
+      if (!done) continue;
+      try { await fs.writeFile(`${tasksDir()}/${rec.id}.json`, JSON.stringify(done)); records[i] = done; } catch { /* try again on the next round */ }
+    }
+    const key = JSON.stringify(records);
+    const changed = key !== this.tasksKey;
+    this.tasks = records;
+    this.tasksKey = key;
+    return changed;
+  }
+
+  /** The machine of an agent's space (null = this computer). */
+  machineOf(a) {
+    return this.spaceOf(a)?.machine ?? null;
+  }
+
+  /** The task given to the tab of this agent, or null. */
+  taskOf(a) {
+    return taskFor(this.tasks, a.tab_name, this.machineOf(a), Date.now());
   }
 
   runningSubs() {
@@ -302,6 +353,7 @@ export default class TabiParty extends View {
     return div().id(`card-${a.address}`).relative().w(W).h(H).flex_none().bg(t.surface)
       .border_1().border_color(t.border)
       .hover((x) => x.border_color(t.input))
+      .when(Boolean(this.taskOf(a)), (el) => el.tooltip(taskTooltip(this.taskOf(a))))
       .on_click(() => run("pane.focus", { pane: a.pane }))
       .child(div().absolute().top(0).left(0).w(3).h(H).bg(accent))
       .child(h_flex().h_full().items_center().gap(10).pl(17)
@@ -332,7 +384,7 @@ export default class TabiParty extends View {
     return div().id(`card-${a.address}`).relative().w(width).h(CH).flex_none().bg(t.surface)
       .border_1().border_color(t.border)
       .hover((x) => x.border_color(t.input))
-      .tooltip(`${wt.repo} · ${wt.checkout} · ${taskLine(a)}${name !== account ? ` · ${account}` : ""}`)
+      .tooltip([`${wt.repo} · ${wt.checkout} · ${taskLine(a)}${name !== account ? ` · ${account}` : ""}`, taskTooltip(this.taskOf(a))].filter(Boolean).join("\n"))
       .on_click(() => run("pane.focus", { pane: a.pane }))
       .child(div().absolute().top(0).left(0).w(2).h(CH).bg(accent))
       .child(h_flex().h_full().items_center().gap(8).pl(12).pr(10)

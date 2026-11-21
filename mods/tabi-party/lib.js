@@ -201,3 +201,67 @@ export function reconcilePortraits(files, liveIds, current, random = Math.random
   }
   return next;
 }
+
+/** A task is not closed in its first seconds: a tab with the same name may already have been "done" when it began. */
+export const MIN_TASK_MS = 20000;
+
+/** How long a task still belongs to the tab it was given to: a later tab with the same name is not about it. */
+export const TASK_WINDOW_MS = 24 * 3600 * 1000;
+
+/** A record of data/tabi/tasks/<id>.json (written by tabi-task), or null when the text is not a usable one. */
+export function parseTask(text) {
+  let r;
+  try { r = JSON.parse(text); } catch { return null; }
+  if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+  if (typeof r.id !== "string" || !r.task || typeof r.task !== "string" || typeof r.tab !== "string" || !r.tab || typeof r.startedAt !== "number") return null;
+  return { ...r, status: r.status === "done" ? "done" : "running", result: typeof r.result === "string" ? r.result : null };
+}
+
+/** The task given to the tab `tab` of `machine` (null = this computer): the latest one, from the last day. */
+export function taskFor(records, tab, machine, now) {
+  let best = null;
+  for (const r of records ?? []) {
+    if (r.tab !== tab || (r.machine ?? null) !== (machine ?? null) || now - r.startedAt > TASK_WINDOW_MS) continue;
+    if (!best || r.startedAt > best.startedAt) best = r;
+  }
+  return best;
+}
+
+/**
+ * The record of a task whose agent has just finished: done, when, and what the agent said last (`said` = { text, at } of its _stop.json),
+ * unless that was said before the task began. Null when it was already done, or began so recently that a "done" is another tab's (one
+ * of the same name that had already finished): nothing to write.
+ */
+export function finishTask(rec, said, now) {
+  if (rec.status === "done" || now - rec.startedAt < MIN_TASK_MS) return null;
+  return { ...rec, status: "done", finishedAt: now, result: said && said.at >= rec.startedAt ? said.text : null };
+}
+
+/** The tooltip of a card that has a task: what was asked and, when it is done, what came of it. "" without a task. */
+export function taskTooltip(rec) {
+  if (!rec) return "";
+  const asked = `Encargo: ${rec.task}`;
+  if (rec.status !== "done") return asked;
+  return `${asked}\n${rec.result ? `Resultado: ${rec.result}` : "Terminó"}`;
+}
+
+/** The `_stop.json` the hook writes when a turn ends (tools/tabi_subagents.py): { text, at }, or null. */
+export function parseStop(text) {
+  let r;
+  try { r = JSON.parse(text); } catch { return null; }
+  if (!r || typeof r.text !== "string" || !r.text || typeof r.at !== "number") return null;
+  return { text: r.text, at: r.at };
+}
+
+/** After this long without having seen the agent work, an agent at rest has finished anyway (Herdr was restarted in the middle). */
+export const IDLE_ENDS_MS = 5 * 60000;
+
+/**
+ * Has the agent of this task finished? "done" always says so. "idle" is what "done" becomes once the person looks at the agent, so it says
+ * so too, but only if the agent was seen working (a launched agent is idle until its first message starts), or after IDLE_ENDS_MS.
+ */
+export function taskEnded(status, sawWorking, rec, now) {
+  if (status === "done") return true;
+  if (status !== "idle") return false;
+  return sawWorking || now - rec.startedAt > IDLE_ENDS_MS;
+}
