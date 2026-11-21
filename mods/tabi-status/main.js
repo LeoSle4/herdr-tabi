@@ -5,7 +5,7 @@ import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, focused, theme, shared, machines, run, exec, appHome, home, window as herdrWindow } from "herdr";
-import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, cardMessage, portraitOf, pushPayload, desktopCommand, WAIT_TRIES } from "./notify.js";
+import { parseConfig, appendLog, parseCurl, snapshot, changes, parseSaid, saidFor, nameOf, cardMessage, portraitOf, pushPayload, desktopCommand, freshCheck, checkCard, checkPush, WAIT_TRIES } from "./notify.js";
 
 const H = 28;
 const TIP = 10;
@@ -36,6 +36,11 @@ export default class TabiStatus extends View {
       // The previous reading is kept even while the feature is off, so turning it on never floods old statuses.
       const events = cfg ? changes(this.pushSeen ?? null, list, cfg.on) : [];
       this.pushSeen = snapshot(list);
+      // The result of a task's check (tabi-party publishes it): told once, and never the one that was there when Herdr started.
+      const check = shared("tabi.check");
+      const fresh = freshCheck(this.checkSeen ?? null, check);
+      this.checkSeen = Math.max(this.checkSeen ?? 0, typeof check?.at === "number" ? check.at : 0);
+      if (fresh && cfg?.on.includes("check")) await this.deliverCheck(fresh, cfg);
       for (const agent of events) {
         this.pending.push({ agent, at: Date.now(), tries: 0 });
         this.log(`queued ${agent.address} -> ${agent.status}`);
@@ -105,34 +110,43 @@ export default class TabiStatus extends View {
   async deliver(agent, said, cfg) {
     if (!cfg) return;
     const name = nameOf(agent, shared("tabi.party"));
-    const active = herdrWindow()?.active;
-    this.log(`deliver ${agent.address} ${agent.status} as "${name}" said="${said}" window.active=${active} desktop=${cfg.desktop} phone=${Boolean(cfg.topic)}`);
-    // The notification of the system only when Herdr is not what the person is looking at: inside Herdr there is already its own.
-    if (cfg.desktop && !active) {
-      const platform = herdrWindow()?.platform ?? "linux";
-      if (platform === "macos" && this.terminalNotifier === undefined) {
-        this.terminalNotifier = await exec("sh", ["-c", "command -v terminal-notifier"], { timeout: 5000 }).then((r) => r.code === 0, () => false);
-      }
-      const card = cardMessage(agent, name, said, portraitOf(shared("tabi.party"), agent.address, appHome()));
-      const options = { terminalNotifier: this.terminalNotifier && cfg.notifier !== "osascript", script: `${appHome()}/tools/desktop-notify.ps1` };
-      let c = desktopCommand(platform, card, options);
-      let result = await this.show(c);
-      // terminal-notifier can be installed and still refused by macOS (no permission yet): osascript is the other way in.
-      if (!result.ok && c.command === "terminal-notifier") {
-        this.log("desktop terminal-notifier did not work: trying osascript");
-        c = desktopCommand(platform, card, { ...options, terminalNotifier: false });
-        result = await this.show(c);
-      }
-    } else if (cfg.desktop) {
-      this.log("desktop skipped: Herdr is the active window");
+    this.log(`deliver ${agent.address} ${agent.status} as "${name}" said="${said}" window.active=${herdrWindow()?.active} desktop=${cfg.desktop} phone=${Boolean(cfg.topic)}`);
+    await this.sendDesktop(cardMessage(agent, name, said, portraitOf(shared("tabi.party"), agent.address, appHome())), cfg);
+    if (cfg.topic) await this.sendPhone(pushPayload(cfg, agent, name, said), cfg);
+  }
+
+  /** The result of a task's check, to the desktop and the phone like any other notice. */
+  async deliverCheck(c, cfg) {
+    this.log(`check ${c.id} ${c.state} as "${c.name}" window.active=${herdrWindow()?.active} desktop=${cfg.desktop} phone=${Boolean(cfg.topic)}`);
+    await this.sendDesktop(checkCard(c, c.address ? portraitOf(shared("tabi.party"), c.address, appHome()) : null), cfg);
+    if (cfg.topic) await this.sendPhone(checkPush(cfg, c), cfg);
+  }
+
+  /** The notification of the system, only when Herdr is not what the person is looking at: inside Herdr there is already its own. */
+  async sendDesktop(card, cfg) {
+    if (!cfg.desktop) return;
+    if (herdrWindow()?.active) { this.log("desktop skipped: Herdr is the active window"); return; }
+    const platform = herdrWindow()?.platform ?? "linux";
+    if (platform === "macos" && this.terminalNotifier === undefined) {
+      this.terminalNotifier = await exec("sh", ["-c", "command -v terminal-notifier"], { timeout: 5000 }).then((r) => r.code === 0, () => false);
     }
-    if (cfg.topic) {
-      const payload = pushPayload(cfg, agent, name, said);
-      // No -f: with it curl hides the body of an error, and ntfy says there what it did not like.
-      await exec("curl", ["-sS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), "-w", "\n%{http_code}", cfg.server], { timeout: 15000 })
-        .then((r) => { const a = parseCurl(r.stdout); this.log(`phone curl exit=${r.code} http=${a.code} ${a.body} ${r.stderr ?? ""}`); },
-          (e) => this.log(`phone curl failed: ${e}`));
+    const options = { terminalNotifier: this.terminalNotifier && cfg.notifier !== "osascript", script: `${appHome()}/tools/desktop-notify.ps1` };
+    let c = desktopCommand(platform, card, options);
+    let result = await this.show(c);
+    // terminal-notifier can be installed and still refused by macOS (no permission yet): osascript is the other way in.
+    if (!result.ok && c.command === "terminal-notifier") {
+      this.log("desktop terminal-notifier did not work: trying osascript");
+      c = desktopCommand(platform, card, { ...options, terminalNotifier: false });
+      result = await this.show(c);
     }
+  }
+
+  /** The push to the phone through ntfy. */
+  async sendPhone(payload, cfg) {
+    // No -f: with it curl hides the body of an error, and ntfy says there what it did not like.
+    await exec("curl", ["-sS", "-m", "10", "-H", "Content-Type: application/json", "-d", JSON.stringify(payload), "-w", "\n%{http_code}", cfg.server], { timeout: 15000 })
+      .then((r) => { const a = parseCurl(r.stdout); this.log(`phone curl exit=${r.code} http=${a.code} ${a.body} ${r.stderr ?? ""}`); },
+        (e) => this.log(`phone curl failed: ${e}`));
   }
 
   /** One arrow: a filled body with a 0.5 px top and bottom border, then the point (fill + edge line). */

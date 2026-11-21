@@ -2,7 +2,7 @@
 // no Herdr calls, so they can be tested with `node --test`. Everything is opt-in: it stays off until
 // <app home>/data/tabi/notify.json exists and is valid.
 
-const EVENTS = ["blocked", "done"];
+const EVENTS = ["blocked", "done", "check"];
 const NAMES = { "claude-code": "Claude Code", codex: "Codex", pi: "Pi", opencode: "OpenCode", gemini: "Gemini" };
 const VERB = { blocked: "te necesita", done: "terminó" };
 const KANJI = { blocked: "待", done: "済" };
@@ -18,7 +18,7 @@ export const WAIT_TRIES = 8;
  *   { "desktop": true,                       a system notification when Herdr is not the active window
  *     "topic": "tabi-<random>",              a push to the phone through ntfy (the topic is the only secret on ntfy.sh)
  *     "server": "https://ntfy.sh",           your own ntfy server (https only)
- *     "on": ["blocked", "done"],
+ *     "on": ["blocked", "done", "check"],   check: the result of the command of a task (Asignar tarea…, "comprobar al terminar")
  *     "details": false,                      true: the push carries the character and the first line of what it said
  *     "notifier": "auto",                    "osascript": never use terminal-notifier on macOS (text only, no portrait)
  *     "debug": false }                       true: writes what happens to data/tabi/notify.log (to find out why nothing shows)
@@ -149,4 +149,32 @@ export function parseCurl(stdout) {
   const lines = String(stdout ?? "").replace(/\s+$/, "").split("\n");
   const code = Number(lines.pop());
   return { code: Number.isInteger(code) ? code : 0, body: lines.join(" ").trim().slice(0, 200) };
+}
+
+/**
+ * The result of a task's check that tabi-party published (shared "tabi.check") if it is news: newer than the last one seen (`seenAt`).
+ * The first reading (seenAt null) never counts, so a Herdr that starts does not announce an old result. Null for anything else.
+ */
+export function freshCheck(seenAt, rec) {
+  if (seenAt == null || !rec || typeof rec !== "object") return null;
+  if (rec.state !== "pass" && rec.state !== "fail") return null;
+  if (typeof rec.at !== "number" || typeof rec.name !== "string" || !rec.name) return null;
+  return rec.at > seenAt ? rec : null;
+}
+
+/** The notice of the system for a check: who, whether it passed and the last thing the command printed. `image` is the portrait or null. */
+export function checkCard(c, image = null) {
+  const pass = c.state === "pass";
+  return { title: `${c.name}: la comprobación ${pass ? "pasó ✓" : "falló ✗"}`, subtitle: "", body: [c.verify, c.tail].filter(Boolean).join(" · "), image };
+}
+
+/** The push for a check. Without `details` only the outcome leaves the machine (not the name, the command or its output). */
+export function checkPush(cfg, c) {
+  const pass = c.state === "pass";
+  const priority = pass ? 3 : 4;
+  if (cfg.details) {
+    const m = checkCard(c);
+    return { topic: cfg.topic, title: m.title, message: m.body || m.title, priority };
+  }
+  return { topic: cfg.topic, title: `Herdr: la comprobación ${pass ? "pasó" : "falló"}`, message: `Una comprobación ${pass ? "pasó" : "falló"}`, priority };
 }
