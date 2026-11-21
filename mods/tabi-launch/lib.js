@@ -163,3 +163,67 @@ export async function switchSession(deps, { pane, text, platform }) {
   try { await write(previous.length > 200000 ? "" : previous); } catch { /* the clipboard keeps the command */ }
   return error ? { ok: false, error } : { ok: true };
 }
+
+// --- A copy of tabi-task/lib.js (mods do not import each other; this file's test checks that they behave the same) ---
+/**
+ * The agents a task can be given to, from knownAgents() and the extra Claude accounts tabi-usage publishes:
+ * the installed ones, then one "Claude Code · <account>" per extra account. [{ key, name, argv }]
+ */
+export function agentChoices(known, accounts) {
+  const installed = (known ?? []).filter((a) => a?.installed && Array.isArray(a.run) && a.run.length)
+    .map((a) => ({ key: a.key, name: a.name, argv: a.run }));
+  const extra = (accounts ?? []).filter((a) => a && !a.default && a.name && a.bin)
+    .map((a) => ({ key: `account-${a.name}`, name: `Claude Code · ${a.name}`, argv: [a.bin] }));
+  return [...installed, ...extra];
+}
+
+/** The name Herdr gives the tab of a task: the character, else the agent. tabi-party links the record to its agent by this name. */
+export function tabName(character, agent) {
+  return character?.name ?? agent?.name;
+}
+
+/** The name of a record's file: the time (so a listing sorts by it) and four random characters; never anything that is a path. */
+export function taskId(now, rnd) {
+  const stamp = new Date(now).toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+  return `${stamp}-${String(rnd ?? "").toLowerCase().replace(/[^0-9a-z]/g, "").slice(0, 8) || "0000"}`;
+}
+
+/**
+ * What is saved in data/tabi/tasks/<id>.json when a task is given: what was asked, who does it and where, and the command that checks
+ * it when it is done (`verify`, optional). tabi-party finishes it (status, result) when the agent does and records what the check found. Null when nothing was asked (the dialog only opens the agent) or there is no agent.
+ */
+export function newTaskRecord({ task, agent, character, branch, folder, machine, now, rnd, verify }) {
+  const text = String(task ?? "").trim().slice(0, 500);
+  if (!text || !agent) return null;
+  return { id: taskId(now, rnd), task: text, agent: agent.name, agentKey: agent.key, character: character?.name ?? null, tab: tabName(character, agent),
+    branch: branch ?? null, folder: folder ?? null, machine: machine ?? null, startedAt: now, status: "running", finishedAt: null, result: null,
+    verify: String(verify ?? "").trim().slice(0, 200) || null, check: null };
+}
+
+// --- Continue a task with another agent (the 継 of a card that has a task) ---
+
+const oneLine = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
+
+/**
+ * What the next agent is told: the task, what the one before said last, and to look at the repository first. One line, because it goes in
+ * as the first message of the agent.
+ */
+export function handoffPrompt({ task, result, from }) {
+  const who = oneLine(from) || "otro agente";
+  const last = oneLine(result).slice(0, 300);
+  return `Continúa esta tarea, que empezó ${who} y quedó sin terminar. Tarea original: ${oneLine(task)}.`
+    + `${last ? ` Lo último que dijo ${who}: ${last}` : ""} Revisa primero el estado del repositorio (git status y git diff) y sigue desde ahí, sin repetir lo que ya está hecho.`;
+}
+
+/**
+ * The tab to open and the record to save to go on with a task in another agent: the same space and folder (the checkout of the worktree
+ * when there was one), the same check command, and the flags chosen for that agent with the gear. Null without a task or an agent.
+ */
+export function handoffLaunch({ rec, from, agent, space, folder, prefs, now, rnd }) {
+  if (!rec?.task || !agent) return null;
+  const args = { name: agent.name, argv: launchArgv(prefKey(agent.key), agent.argv, prefs), task: handoffPrompt({ task: rec.task, result: rec.result, from }) };
+  if (space) args.space = space;
+  if (folder) args.folder = folder;
+  const record = newTaskRecord({ task: `→ ${rec.task}`, agent, character: null, branch: rec.branch, folder: folder ?? rec.folder, machine: rec.machine, now, rnd, verify: rec.verify });
+  return { command: "tab.new", args, record };
+}

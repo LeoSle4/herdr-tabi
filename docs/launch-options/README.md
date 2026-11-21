@@ -27,6 +27,20 @@ talk, in the same conversation, without typing the command yourself.
 - Only **Claude Code**, only on **this macOS computer**, and only when the agent is **not working or waiting for you**: the dialog
   says why when it cannot. Codex has its own `/model` picker, which tabi does not drive.
 
+## Going on with a task in another agent (継)
+
+A card that has a task (one given with **Asignar tarea…**, see `docs/assign-task`) has a **継** next to its status. It opens **継 ·
+Continuar con otro agente**: choose which agent goes on (Claude Code, an extra account, Codex…) and see exactly what it will be told.
+It is for when the agent ran out of quota or got stuck.
+
+- A tab opens **in the same space and folder** (in the checkout of the worktree if the task had one), with the agent you chose and
+  the model and effort you set for it with the ⚙. The first message is one line: the original task, the last thing the previous agent
+  said, and to look at the repository (`git status`, `git diff`) before going on without repeating what is done.
+- The new task gets its own record (shown as "→ <task>"), with the **same check command**, so its card shows ✓ or ✗ too.
+- **The previous agent is not touched**: it keeps running, if it still does. It is not a hand-over of the conversation (the new agent
+  has no memory of it, only that message and the files), and the last thing it said is only there if the hooks recorded it
+  (`docs/subagents`).
+
 ## Limits
 
 - The ⚙ is for **starting** an agent; for one that is running use the ⇄ above (or `/model` and `/effort` yourself).
