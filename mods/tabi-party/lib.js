@@ -64,6 +64,66 @@ export function subtitle(agent) {
   return `${agent.space_name || "sin space"} · ${taskLine(agent)}`;
 }
 
+/** The folder where Herdr puts worktrees (the "worktrees.directory" setting, `~` expanded; default ~/.herdr/worktrees), no trailing slash. */
+export function worktreesRoot(settings, home) {
+  const dir = settings?.worktrees?.directory;
+  const raw = typeof dir === "string" && dir.trim() ? dir.trim() : "~/.herdr/worktrees";
+  return (raw.startsWith("~") ? home + raw.slice(1) : raw).replace(/[\\/]+$/, "");
+}
+
+/** { repo, checkout } of a folder that lives in the worktrees folder (<root>/<repo>/<checkout>), null for any other folder. */
+export function worktreeOf(folder, root) {
+  const f = String(folder ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const r = String(root ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!f || !r || !f.startsWith(`${r}/`)) return null;
+  const [repo, checkout, ...more] = f.slice(r.length + 1).split("/");
+  return repo && checkout && more.length === 0 ? { repo, checkout } : null;
+}
+
+/** { repo, checkout, branch } of a space that is a worktree, null for any other. The checkout names the branch while it is unknown. */
+export function worktreeInfo(space, root) {
+  const worktree = worktreeOf(space?.folder, root);
+  return worktree ? { ...worktree, branch: space.branch || worktree.checkout } : null;
+}
+
+/** The last part of a folder, with slashes of either kind and a trailing one ("" when there is none). */
+export function baseName(folder) {
+  return String(folder ?? "").split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+/**
+ * The project a space belongs to. Herdr calls an unnamed space after where its terminal is NOW (the repo), while its `folder` is where
+ * it started and can be anywhere else: so the name is the better answer. A space somebody renamed says nothing about its repo: its folder does.
+ */
+export function projectName(space) {
+  if (!space) return "";
+  return space.named ? baseName(space.folder) : (space.name || baseName(space.folder));
+}
+
+/**
+ * The agents as a tree. A worktree agent hangs from the first agent of its project (the same repo name on the same machine: two
+ * computers never share a tree), and keeps the order of the list among its brothers. Everything else, in the order of the list:
+ * [{ agent, wt: null, children: [{ agent, wt }] }]. A worktree whose project has no agent stands alone where it comes, with its
+ * `wt` and `orphan: true`, and is drawn compact all the same. `spaceOf(agent)` gives its space, or undefined.
+ */
+export function groupAgents(list, spaceOf, root) {
+  const items = list.map((agent) => {
+    const space = spaceOf(agent);
+    return { agent, wt: worktreeInfo(space, root), key: `${space?.machine ?? ""}|${projectName(space)}`, named: projectName(space) !== "" };
+  });
+  const parents = new Map(); // project -> the node of its first agent
+  const nodes = items.map((x) => (x.wt ? null : { agent: x.agent, wt: null, children: [] }));
+  items.forEach((x, i) => { if (nodes[i] && x.named && !parents.has(x.key)) parents.set(x.key, nodes[i]); });
+  const out = [];
+  items.forEach((x, i) => {
+    if (nodes[i]) { out.push(nodes[i]); return; }
+    const parent = parents.get(`${x.key.split("|")[0]}|${x.wt.repo}`);
+    if (parent) parent.children.push({ agent: x.agent, wt: x.wt });
+    else out.push({ agent: x.agent, wt: x.wt, children: [], orphan: true });
+  });
+  return out;
+}
+
 /** Image files a portrait can come from: png, jpg, jpeg (any case). */
 export function isImage(name) {
   return /\.(png|jpe?g)$/i.test(name);

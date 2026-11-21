@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statusInfo, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
+import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
 
 test("status: working 働 cream, blocked 待 amber, idle and done 済 gray", () => {
   assert.deepEqual([statusInfo("working").kanji, statusInfo("working").accent], ["働", "solid"]);
@@ -162,4 +162,115 @@ test("reconcilePortraits: the preferred one is ignored when the agent is gone, h
   assert.equal(reconcilePortraits(files, ["x"], { x: "a.png" }, () => 0, { file: "b.png", id: "x" }).x, "a.png"); // it keeps its own
   assert.equal(reconcilePortraits(files, ["old", "new"], { old: "a.png" }, () => 0, { file: "a.png", id: "new" }).new, "b.png"); // worn
   assert.equal(reconcilePortraits(files, ["new"], {}, () => 0, { file: "zzz.png", id: "new" }).new, "a.png"); // not a portrait
+});
+
+test("worktreesRoot: the folder of the worktrees setting, with ~ expanded, or Herdr's default", () => {
+  assert.equal(worktreesRoot({ worktrees: { directory: "~/Projects/worktrees" } }, "/Users/u"), "/Users/u/Projects/worktrees");
+  assert.equal(worktreesRoot({ worktrees: { directory: "/srv/wt/" } }, "/Users/u"), "/srv/wt");
+  assert.equal(worktreesRoot({}, "/Users/u"), "/Users/u/.herdr/worktrees");
+  assert.equal(worktreesRoot(undefined, "/Users/u"), "/Users/u/.herdr/worktrees");
+  assert.equal(worktreesRoot({ worktrees: { directory: "  " } }, "/Users/u"), "/Users/u/.herdr/worktrees");
+  assert.equal(worktreesRoot({ worktrees: { directory: "C:\\wt\\" } }, "C:\\Users\\u"), "C:\\wt");
+});
+
+test("worktreeOf: <root>/<repo>/<checkout> gives the repo, anything else is not a worktree", () => {
+  const root = "/Users/u/Projects/worktrees";
+  assert.deepEqual(worktreeOf("/Users/u/Projects/worktrees/herdr-tabi/tabi-mai-f353", root), { repo: "herdr-tabi", checkout: "tabi-mai-f353" });
+  assert.deepEqual(worktreeOf("/Users/u/Projects/worktrees/herdr-tabi/tabi-mai-f353/", root), { repo: "herdr-tabi", checkout: "tabi-mai-f353" });
+  assert.deepEqual(worktreeOf("C:\\wt\\app\\fix-login", "C:\\wt"), { repo: "app", checkout: "fix-login" });
+  assert.equal(worktreeOf("/Users/u/Projects/herdr-tabi", root), null);
+  assert.equal(worktreeOf("/Users/u/Projects/worktrees/herdr-tabi", root), null); // the repo's folder, not a checkout
+  assert.equal(worktreeOf("/Users/u/Projects/worktreesX/a/b", root), null); // only a prefix of the name
+  assert.equal(worktreeOf(undefined, root), null);
+  assert.equal(worktreeOf("/a/b/c", ""), null);
+});
+
+test("worktreeInfo: the repo, the checkout and the branch of a space in the worktrees folder", () => {
+  const root = "/h/worktrees";
+  const space = { name: "tabi-mai-f353", folder: "/h/worktrees/herdr-tabi/tabi-mai-f353", branch: "tabi/mai-f353" };
+  assert.deepEqual(worktreeInfo(space, root), { repo: "herdr-tabi", checkout: "tabi-mai-f353", branch: "tabi/mai-f353" });
+  // the branch of the first terminal can be unknown for a moment: the checkout stands in for it
+  assert.equal(worktreeInfo({ ...space, branch: null }, root).branch, "tabi-mai-f353");
+  assert.equal(worktreeInfo({ ...space, branch: "" }, root).branch, "tabi-mai-f353");
+});
+
+test("worktreeInfo: a space that is not a worktree, or no space at all, is null", () => {
+  assert.equal(worktreeInfo({ name: "PitLane", folder: "/h/Projects/PitLane", branch: "main" }, "/h/worktrees"), null);
+  assert.equal(worktreeInfo(undefined, "/h/worktrees"), null);
+  assert.equal(worktreeInfo({ folder: "/h/worktrees/a/b" }, ""), null);
+});
+
+const ROOT = "/h/worktrees";
+const sp = (id, folder, extra = {}) => ({ id, name: baseName(folder), named: false, folder, branch: "main", machine: null, ...extra });
+const wtSpace = (id, repo, checkout, machine = null) => sp(id, `${ROOT}/${repo}/${checkout}`, { branch: `tabi/${checkout}`, machine });
+const ag = (address, space) => ({ address, space });
+const view = (nodes) => nodes.map((n) => [n.agent.address, n.children.map((c) => c.agent.address), n.orphan === true]);
+
+test("baseName: the last part of a folder, with slashes of either kind and a trailing one", () => {
+  assert.equal(baseName("/Users/u/Projects/herdr-tabi"), "herdr-tabi");
+  assert.equal(baseName("/Users/u/Projects/herdr-tabi/"), "herdr-tabi");
+  assert.equal(baseName("C:\\Projects\\PitLane"), "PitLane");
+  assert.equal(baseName(""), "");
+  assert.equal(baseName(undefined), "");
+});
+
+test("groupAgents: worktree agents hang under the first agent of their repo, in the order of the list", () => {
+  const spaces = { s1: sp("s1", "/h/Projects/herdr-tabi"), w1: wtSpace("w1", "herdr-tabi", "tabi-mai-f353"), w2: wtSpace("w2", "herdr-tabi", "tabi-koyun-3f9a"), s2: sp("s2", "/h/Projects/PitLane") };
+  const list = [ag("kazuto", "s1"), ag("susana", "s2"), ag("mai", "w1"), ag("koyun", "w2")];
+  const nodes = groupAgents(list, (a) => spaces[a.space], ROOT);
+  assert.deepEqual(view(nodes), [["kazuto", ["mai", "koyun"], false], ["susana", [], false]]);
+  assert.deepEqual(nodes[0].children[0].wt, { repo: "herdr-tabi", checkout: "tabi-mai-f353", branch: "tabi/tabi-mai-f353" });
+});
+
+test("groupAgents: a worktree that comes before its project in the list still hangs from it", () => {
+  const spaces = { s1: sp("s1", "/h/Projects/herdr-tabi"), w1: wtSpace("w1", "herdr-tabi", "x") };
+  const nodes = groupAgents([ag("mai", "w1"), ag("kazuto", "s1")], (a) => spaces[a.space], ROOT);
+  assert.deepEqual(view(nodes), [["kazuto", ["mai"], false]]);
+});
+
+test("groupAgents: with several agents in the repo, the worktrees hang from the first only", () => {
+  const spaces = { s1: sp("s1", "/h/Projects/herdr-tabi"), s1b: sp("s1b", "/h/Projects/herdr-tabi"), w1: wtSpace("w1", "herdr-tabi", "x") };
+  const nodes = groupAgents([ag("a", "s1"), ag("b", "s1b"), ag("mai", "w1")], (x) => spaces[x.space], ROOT);
+  assert.deepEqual(view(nodes), [["a", ["mai"], false], ["b", [], false]]);
+});
+
+test("groupAgents: another machine never shares a tree, even with the same repo name", () => {
+  const spaces = { local: sp("local", "/h/Projects/herdr-tabi"), remote: sp("remote", "C:\\Projects\\herdr-tabi", { machine: "msi-casa" }), w: wtSpace("w", "herdr-tabi", "x", "msi-casa") };
+  const nodes = groupAgents([ag("kazuto", "local"), ag("t9", "remote"), ag("mai", "w")], (a) => spaces[a.space], ROOT);
+  assert.deepEqual(view(nodes), [["kazuto", [], false], ["t9", ["mai"], false]]);
+});
+
+test("groupAgents: a worktree with no agent in its project stands alone, in its place, and is marked", () => {
+  const spaces = { s2: sp("s2", "/h/Projects/PitLane"), w1: wtSpace("w1", "herdr-tabi", "x") };
+  const nodes = groupAgents([ag("susana", "s2"), ag("mai", "w1")], (a) => spaces[a.space], ROOT);
+  assert.deepEqual(view(nodes), [["susana", [], false], ["mai", [], true]]);
+  assert.equal(nodes[1].wt.repo, "herdr-tabi");
+});
+
+test("groupAgents: without worktrees the list is the same, and an agent whose space is unknown stays", () => {
+  const spaces = { s1: sp("s1", "/h/Projects/a"), s2: sp("s2", "/h/Projects/b") };
+  assert.deepEqual(view(groupAgents([ag("x", "s1"), ag("y", "s2"), ag("z", "gone")], (a) => spaces[a.space], ROOT)), [["x", [], false], ["y", [], false], ["z", [], false]]);
+  assert.deepEqual(groupAgents([], () => undefined, ROOT), []);
+});
+
+test("projectName: an unnamed space is called after where its terminal is now; a named one by its folder", () => {
+  // the real case: the space started in Proyecto_futuro and its terminal moved to herdr-tabi, so Herdr calls it "herdr-tabi"
+  assert.equal(projectName({ name: "herdr-tabi", named: false, folder: "/Users/u/Projects/Proyecto_futuro" }), "herdr-tabi");
+  // somebody renamed it: the name says nothing about the repo, the folder does
+  assert.equal(projectName({ name: "mi backend", named: true, folder: "/Users/u/Projects/api" }), "api");
+  assert.equal(projectName(undefined), "");
+});
+
+test("groupAgents: the project is found by the name of the space, not by the folder it started in", () => {
+  const spaces = {
+    s1: { id: "s1", name: "herdr-tabi", named: false, folder: "/Users/u/Projects/Proyecto_futuro", machine: null, branch: null },
+    w1: wtSpace("w1", "herdr-tabi", "tabi-koyun-3f9a"),
+  };
+  const nodes = groupAgents([ag("kazuto", "s1"), ag("koyun", "w1")], (a) => spaces[a.space], ROOT);
+  assert.deepEqual(view(nodes), [["kazuto", ["koyun"], false]]);
+});
+
+test("groupAgents: a renamed space is matched by its folder", () => {
+  const spaces = { s1: sp("s1", "/h/Projects/herdr-tabi", { name: "trabajo", named: true }), w1: wtSpace("w1", "herdr-tabi", "x") };
+  assert.deepEqual(view(groupAgents([ag("a", "s1"), ag("mai", "w1")], (a) => spaces[a.space], ROOT)), [["a", ["mai"], false]]);
 });
