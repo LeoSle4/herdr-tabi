@@ -10,6 +10,22 @@ The "+" menu has an **Asignar tarea…** entry. It opens a dialog to give a task
 Confirming opens a tab named after the character, in the folder you were in, with the agent running and the task sent as its
 first message. That is Herdr's own `tab.new {name, space, folder, argv, task}`; nothing else is started or installed.
 
+## In a worktree of its own
+
+The box **En un worktree nuevo** gives the task its own branch and folder, so the agent cannot step on what you are doing in the project:
+
+- Herdr's own worktree dialog does the work: it creates the branch `tabi/<character or agent>-<4 characters>` from where you are and a
+  checkout in `~/Projects/worktrees/<repo>/<branch>` (the folder of the `worktrees.directory` setting), and opens a space there with a
+  first tab named after the character and the agent running.
+- The task is not sent as a message: Herdr's dialog does not forward one. It goes as the **last argument of the agent's command**
+  (`claude "<task>"`, `codex "<task>"`; a second Claude account forwards it too). Other agents open in the worktree **without** the
+  task and the dialog says so: write it in their tab. A task that starts with `-` gets a space in front, so it can never become an
+  option of the agent.
+- It is offered only for spaces of **this computer on macOS or Linux**. On Windows the agent starts through a `.cmd` wrapper, which
+  would run the `&` or `|` of a task as commands; on another machine nothing here knows its folders. There the box is dim and says why.
+- It is a checkout without your untracked or ignored files (`.pr/`, `data/`...). To remove it: `git worktree remove <folder>` from
+  the main checkout (not from inside the worktree), then `git branch -d <branch>`, then close its space.
+
 ## The character
 
 The card of an agent wears the portrait it was given when it appeared. The dialog names the new tab after the character and tells
