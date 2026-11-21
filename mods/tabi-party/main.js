@@ -12,7 +12,7 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, settings, home, run, openOverlay, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, reviewCount, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, worktreeIndex, parseQueue, queueDue, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, reviewCount, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -59,6 +59,11 @@ export default class TabiParty extends View {
     this.subsKey = "";
     this.tasks = []; // the records of data/tabi/tasks, newest first
     this.tasksKey = "";
+    this.queueBusy = false;
+    this.queueLast = {}; // usageId -> when the queue last launched something for that account (the next one waits for a newer reading)
+    this.queueLost = new Set(); // ids already reported as having no space to open in
+    this.worktrees = {}; // { repo: [checkouts] } under the worktrees folder
+    this.worktreesKey = "";
     this.worked = new Set(); // ids of the tasks whose agent was seen working
     if (checking()) return;
     cx.spawn(async (cx) => {
@@ -71,6 +76,8 @@ export default class TabiParty extends View {
     // Sub-agents: re-read every 3 s; redraw when something changed or while one runs (its elapsed time moves).
     cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { if ((await this.loadSubs()) || this.runningSubs()) cx.notify(); }));
     cx.timer.every(3000, (cx) => cx.spawn(async (cx) => { if (await this.loadTasks()) cx.notify(); }));
+    cx.timer.every(6000, (cx) => cx.spawn(async (cx) => { if (await this.scanWorktrees()) cx.notify(); }));
+    cx.timer.every(5000, (cx) => cx.spawn(async () => { await this.queueTick(); }));
     cx.spawn(async (cx) => { if (await this.detect()) cx.notify(); });
   }
 
@@ -121,10 +128,71 @@ export default class TabiParty extends View {
     return changed;
   }
 
+  /**
+   * The queue of tasks waiting for quota (data/tabi/queue, left by "Dejar en espera" in Asignar tarea…): opens the ones whose account is
+   * free now. Each entry is deleted BEFORE its tab opens, so it can never open twice, and a failure afterwards is not retried: the person
+   * is told. It runs only while Herdr is open, and trusts only a recent reading of the account (see queueDue).
+   */
+  async queueTick() {
+    if (this.queueBusy) return; // a round still running: two rounds could read the same entry and open it twice
+    this.queueBusy = true;
+    try { await this.queueRound(); } finally { this.queueBusy = false; }
+  }
+
+  async queueRound() {
+    const dir = `${appHome()}/data/tabi/queue`;
+    let names = [];
+    try { names = (await fs.readdir(dir)).filter((n) => n.endsWith(".json")); } catch { return; } // no queue: nothing to do
+    const entries = [];
+    for (const name of names) {
+      try { const e = parseQueue(await fs.readFile(`${dir}/${name}`, "utf8")); if (e) entries.push(e); } catch { /* removed while reading */ }
+    }
+    if (!entries.length) return;
+    let usage = {};
+    try { usage = JSON.parse(await fs.readFile(`${appHome()}/data/tabi/usage.json`, "utf8")); } catch { return; } // no readings: nothing is trusted
+    const now = Date.now();
+    const due = queueDue(entries, usage, now, new Set(spaces().map((s) => s.id)), this.queueLast);
+    for (const e of due.lost) {
+      if (this.queueLost.has(e.id)) continue;
+      this.queueLost.add(e.id);
+      notify({ title: "Tarea en espera sin espacio", body: `${e.task} · su espacio ya no existe; cancélala o ábrela a mano`, level: "error" });
+    }
+    for (const e of due.launch) {
+      try {
+        await fs.mkdir(tasksDir(), { recursive: true });
+        await fs.writeFile(`${tasksDir()}/${e.record.id}.json`, JSON.stringify({ ...e.record, startedAt: now }));
+        await fs.unlink(`${dir}/${e.id}.json`); // if this fails nothing opens: it would open again on the next round
+      } catch { continue; }
+      this.queueLast[e.usageId] = now;
+      if (e.portrait) setShared("tabi.next-portrait", { file: e.portrait, at: now });
+      try {
+        run(e.command, e.args);
+        notify({ title: "Salió de la espera", body: `${e.task} · ${e.name}`, level: "success" });
+      } catch (err) { notify({ title: "No pude abrir la tarea en espera", body: `${e.task} · ${String(err?.message ?? err)}`, level: "error" }); }
+    }
+  }
+
+  /** Reads the folders of the worktrees ({ repo: [checkouts] }), to recognise a worktree whose space started in the repo. Resolves true when it changed. */
+  async scanWorktrees() {
+    const root = worktreesRoot(settings(), home());
+    const entries = [];
+    try {
+      for (const repo of (await fs.readdir(root)).slice(0, 40)) {
+        try { entries.push({ name: repo, children: (await fs.readdir(`${root}/${repo}`)).slice(0, 80).map((name) => ({ name, dir: true })) }); } catch { /* a file, not a repo folder */ }
+      }
+    } catch { /* no worktrees folder yet */ }
+    const index = worktreeIndex(entries);
+    const key = JSON.stringify(index);
+    const changed = key !== this.worktreesKey;
+    this.worktrees = index;
+    this.worktreesKey = key;
+    return changed;
+  }
+
   /** Reads the task records and closes those whose agent has finished (done, with what it said last). Resolves true when something changed. */
   async loadTasks() {
-    let names;
-    try { names = (await fs.readdir(tasksDir())).filter((n) => n.endsWith(".json")).sort().reverse().slice(0, 60); } catch { return false; }
+    let names = [];
+    try { names = (await fs.readdir(tasksDir())).filter((n) => n.endsWith(".json")).sort().reverse().slice(0, 60); } catch { /* no folder: no tasks, and the count of tasks to review must drop to 0 */ }
     const records = [];
     for (const name of names) {
       try {
@@ -478,7 +546,7 @@ export default class TabiParty extends View {
     const body = v_flex().gap(8).px(12).pb(12);
     this.publish(list, names, cx);
     // The tree: an agent of a worktree hangs from the first agent of its project (same repo, same machine).
-    const nodes = groupAgents(list, (a) => this.spaceOf(a), worktreesRoot(settings(), home()));
+    const nodes = groupAgents(list, (a) => this.spaceOf(a), worktreesRoot(settings(), home()), this.worktrees);
     for (const node of nodes) {
       const a = node.agent;
       const name = cardName(this.assign[this.idOf(a)], names[a.address]);

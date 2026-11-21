@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentChoices, tabName, taskId, newTaskRecord, handoffPrompt, handoffLaunch, slashCommand, canSwitch, switchSession, familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
+import { agentChoices, tabName, taskId, newTaskRecord, handoffPrompt, handoffLaunch, reviewPrompt, slashCommand, canSwitch, switchSession, familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
 
 const cache = JSON.stringify({
   models: [
@@ -247,4 +247,40 @@ test("the copies of tabi-task (agentChoices, tabName, taskId, newTaskRecord) beh
   const a = { task: " x ", agent: codex, character: null, branch: "b", folder: "/f", machine: null, now: 5, rnd: "0001", verify: " node --test " };
   assert.deepEqual(newTaskRecord(a), task.newTaskRecord(a));
   assert.equal(newTaskRecord({ ...a, task: "  " }), task.newTaskRecord({ ...a, task: "  " }));
+});
+
+test("reviewPrompt: ask another agent to read the work, not to change it, in one line, with what the check said", () => {
+  const p = reviewPrompt({ task: "arregla el login", result: "Listo, arreglé el formulario.", from: "Koyun", verify: "node --test", check: { state: "fail", tail: "2 failed" } });
+  assert.match(p, /^Revisa el trabajo/);
+  assert.match(p, /sin modificar/);
+  assert.match(p, /Koyun/);
+  assert.match(p, /arregla el login/);
+  assert.match(p, /Listo, arreglé el formulario\./);
+  assert.match(p, /node --test/);
+  assert.match(p, /2 failed/);
+  assert.match(p, /git diff/);
+  assert.equal(p.includes("\n"), false);
+});
+
+test("reviewPrompt: without a result or a check it mentions neither; a long result is cut; newlines are squeezed", () => {
+  const p = reviewPrompt({ task: "x", result: null, from: undefined, verify: null, check: null });
+  assert.doesNotMatch(p, /Lo que dijo/);
+  assert.doesNotMatch(p, /comprobación/);
+  assert.match(p, /otro agente/);
+  assert.match(reviewPrompt({ task: "x", result: null, from: "K", verify: "npm test", check: { state: "pass", tail: "ok" } }), /npm test.*pasó/);
+  assert.ok(reviewPrompt({ task: "x", result: "r".repeat(2000), from: "K" }).length < 1100);
+  assert.equal(reviewPrompt({ task: "a\nb", result: "c\nd", from: "K" }).includes("\n"), false);
+});
+
+test("handoffLaunch with kind review: the reviewer is told to read, and its record is marked as a review and has no check of its own", () => {
+  const r = handoffLaunch({ kind: "review", rec: rec({ check: { state: "pass", tail: "12 passed" } }), from: "Koyun", agent: codex, space: "spA", folder: "/p/repo", prefs: {}, now: 9000, rnd: "ab12" });
+  assert.equal(r.command, "tab.new");
+  assert.match(r.args.task, /^Revisa el trabajo/);
+  assert.equal(r.record.task, "審 arregla el login");
+  assert.equal(r.record.verify, null);
+  // the default is still the one before: go on with the task
+  const d = handoffLaunch({ rec: rec(), from: "Koyun", agent: codex, space: "spA", folder: "/p/repo", prefs: {}, now: 9000, rnd: "ab12" });
+  assert.match(d.args.task, /^Continúa esta tarea/);
+  assert.equal(d.record.task, "→ arregla el login");
+  assert.equal(d.record.verify, "node --test");
 });

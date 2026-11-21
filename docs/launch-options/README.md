@@ -47,3 +47,10 @@ It is for when the agent ran out of quota or got stuck.
 - Only this computer: the list of Codex models is read from here.
 - A value that could be taken for a flag or a shell (anything but letters, digits, dot, dash and underscore) is dropped when the file
   is read, and the command typed into an agent is only ever `/model <name>` or `/effort <level>`.
+
+## Asking another agent to review (審)
+
+The inbox (`docs/review-inbox`) has a **Que otro revise** button that opens this same dialog, with the title **審 · Que otro agente
+revise**. The agent you choose opens in the same space and folder, but it is told to *read* the work (the task, what the first agent said,
+what the check found, `git status` and `git diff`) and to answer with a short list of findings, **without modifying any file**. It is a
+request in the message, not a lock: the agent could still write if it decided to. Its record starts with **審**.

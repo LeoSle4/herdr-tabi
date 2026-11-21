@@ -17,13 +17,29 @@ A group with nothing in it is not shown, and the chips next to the title count e
 - what the agent said last (if the hooks recorded it, `docs/subagents`) and what its check printed;
 - **what changed in its folder**: files, `+lines −lines` (green and red), and files git does not follow yet, with the branch if it has
   one. For a worktree task it is looked at where its branch lives. It is read with git, **read-only** (nothing is written under `.git`).
+  Click that line to open the list of the files, each with its own `+lines −lines` (up to 8; the rest is counted), **nuevo** for the ones git
+  does not follow yet and **binario** for the ones without lines.
 
-And three buttons, each with its icon:
+And four buttons, each with its icon:
 
 - **Ver agente**: focuses the agent's tab (it says so when the agent is no longer open).
+- **Que otro revise**: opens the same dialog as **継** (`docs/launch-options`) but to ask another agent to *read* the work: it is told
+  the task, what the first agent said and what the check found, to look at `git status` and `git diff` and to answer with a short list of
+  findings, **without modifying any file**. It opens in the same space and folder, with the model you chose with the ⚙, and it leaves
+  its own record, marked **審**, so you see it in the inbox when it ends. The first agent is not touched.
 - **Copiar PR**: copies a description already written for a pull request: the task as the title, what the agent said, the check and
   the changes with the branch. macOS and Linux (`pbcopy`, or `wl-copy` / `xclip`).
 - **Revisada**: marks the task as reviewed (`reviewed: true` in its record in `data/tabi/tasks/`) and it leaves the inbox.
+
+## Tasks waiting for quota (En espera)
+
+A task left waiting with **Dejar en espera** (`docs/assign-task`) shows here, under the groups, with the account it is for and since when,
+and a **Cancelar** button: cancelling deletes it and it never opens. It opens by itself when its account is back under 85 %.
+
+## The day in one line
+
+At the bottom it sums up the last 24 hours, **reviewed or not**: `Hoy: 4 tareas · 2 ✓ · 1 ✗ · 1 sin comprobación · 1 revisada ·
+Claude Code 2 · Codex 2`. It says only what there is, and it is not shown when nothing ended.
 
 ## What it does not do
 

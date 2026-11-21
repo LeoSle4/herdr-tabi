@@ -80,10 +80,28 @@ export function worktreeOf(folder, root) {
   return repo && checkout && more.length === 0 ? { repo, checkout } : null;
 }
 
-/** { repo, checkout, branch } of a space that is a worktree, null for any other. The checkout names the branch while it is unknown. */
-export function worktreeInfo(space, root) {
+/**
+ * { repo, checkout, branch } of a space that is a worktree, null for any other. The checkout names the branch while it is unknown.
+ * Herdr gives the folder where a space STARTED, which can be the repo itself even when its terminal is in a worktree now: so, when the
+ * folders of the worktrees are known ({ repo: [checkouts] }, see worktreeIndex), a space nobody renamed whose name (where its terminal is)
+ * is the checkout of exactly one repo is that worktree too.
+ */
+export function worktreeInfo(space, root, known) {
   const worktree = worktreeOf(space?.folder, root);
-  return worktree ? { ...worktree, branch: space.branch || worktree.checkout } : null;
+  if (worktree) return { ...worktree, branch: space.branch || worktree.checkout };
+  if (!known || !space || space.named || !space.name) return null;
+  const repos = Object.keys(known).filter((repo) => known[repo].includes(space.name));
+  return repos.length === 1 ? { repo: repos[0], checkout: space.name, branch: space.branch || space.name } : null;
+}
+
+/** { repo: [checkouts] } from what is in the worktrees folder: [{ name, children: [{ name, dir }] }] (a repo with no checkout is left out). */
+export function worktreeIndex(entries) {
+  const out = {};
+  for (const repo of entries ?? []) {
+    const checkouts = (repo.children ?? []).filter((c) => c.dir).map((c) => c.name);
+    if (checkouts.length) out[repo.name] = checkouts;
+  }
+  return out;
 }
 
 /** The last part of a folder, with slashes of either kind and a trailing one ("" when there is none). */
@@ -106,10 +124,10 @@ export function projectName(space) {
  * [{ agent, wt: null, children: [{ agent, wt }] }]. A worktree whose project has no agent stands alone where it comes, with its
  * `wt` and `orphan: true`, and is drawn compact all the same. `spaceOf(agent)` gives its space, or undefined.
  */
-export function groupAgents(list, spaceOf, root) {
+export function groupAgents(list, spaceOf, root, known) {
   const items = list.map((agent) => {
     const space = spaceOf(agent);
-    return { agent, wt: worktreeInfo(space, root), key: `${space?.machine ?? ""}|${projectName(space)}`, named: projectName(space) !== "" };
+    return { agent, wt: worktreeInfo(space, root, known), key: `${space?.machine ?? ""}|${projectName(space)}`, named: projectName(space) !== "" };
   });
   const parents = new Map(); // project -> the node of its first agent
   const nodes = items.map((x) => (x.wt ? null : { agent: x.agent, wt: null, children: [] }));
@@ -334,4 +352,50 @@ export function checkNotice(rec, check) {
 /** How many finished tasks are waiting for the person to review them (the last week): tabi-panel says it, tabi-review lists them. */
 export function reviewCount(records, now) {
   return (records ?? []).filter((r) => r.status === "done" && !r.reviewed && (r.finishedAt == null || now - r.finishedAt <= 7 * 24 * 3600 * 1000)).length;
+}
+
+// --- The queue of tasks waiting for quota (data/tabi/queue/<id>.json, written by tabi-task, read by the inbox of tabi-review) ---
+
+/** An account is over its limit above this % of its 5-hour window (a copy of tabi-task/lib.js; its test checks they agree). */
+const QUEUE_LIMIT = 85;
+/** A reading of the account older than this is not trusted to launch anything. */
+export const QUEUE_FRESH_MS = 15 * 60 * 1000;
+
+/** A queued entry as saved, or null when it is not a usable one: only a `tab.new` is ever run from the queue. */
+export function parseQueue(text) {
+  let e;
+  try { e = JSON.parse(text); } catch { return null; }
+  if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+  if (typeof e.id !== "string" || !e.id || typeof e.usageId !== "string" || !e.usageId || e.command !== "tab.new") return null;
+  if (!e.args || typeof e.args !== "object" || Array.isArray(e.args) || !e.record || typeof e.record !== "object" || typeof e.record.id !== "string") return null;
+  return e;
+}
+
+/** Is the 5-hour window of this reading free: fresh, not failed, and at or under the limit (or already renewed)? */
+function quotaFree(reading, now) {
+  if (!reading || reading.error || typeof reading.okAt !== "number" || now - reading.okAt > QUEUE_FRESH_MS) return false;
+  const w = (reading.windows ?? []).find((x) => x.label !== "weekly");
+  if (!w || typeof w.used !== "number") return false;
+  if (w.resets != null && w.resets <= now) return true; // the window has renewed since a fresh reading
+  return w.used <= QUEUE_LIMIT;
+}
+
+/**
+ * What to do with the queue now: { launch, waiting, lost }. The oldest entry of an account goes when that account is free, and only one per
+ * account: the next waits for a reading made after the launch (`lastLaunch`: usageId -> when). An entry whose space is gone is `lost`: it is
+ * never launched somewhere else. An entry with no space goes where Herdr puts a new tab.
+ */
+export function queueDue(entries, usage, now, spaceIds, lastLaunch) {
+  const out = { launch: [], waiting: [], lost: [] };
+  const taken = new Set();
+  const sorted = [...(entries ?? [])].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  for (const e of sorted) {
+    if (e.args.space && !spaceIds.has(e.args.space)) { out.lost.push(e); continue; }
+    const reading = usage?.[e.usageId];
+    const after = lastLaunch?.[e.usageId];
+    const fresh = after == null || (typeof reading?.okAt === "number" && reading.okAt > after);
+    if (!taken.has(e.usageId) && fresh && quotaFree(reading, now)) { out.launch.push(e); taken.add(e.usageId); }
+    else out.waiting.push(e);
+  }
+  return out;
 }

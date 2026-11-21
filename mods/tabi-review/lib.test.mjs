@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, REVIEW_WINDOW_MS, reviewState, groupReview } from "./lib.js";
+import { parseTask, pendingReview, markReviewed, folderFor, diffStat, prText, copyCommand, agentOf, agoLabel, REVIEW_WINDOW_MS, reviewState, groupReview, fileChanges, shortPath, daySummary, summaryText, parseQueue, sortQueue } from "./lib.js";
 import * as party from "../tabi-party/lib.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -145,4 +145,60 @@ test("groupReview: failures first, then what passed, what is checking, what has 
   assert.deepEqual(groupReview([rec({ id: "p1" })]).map((g) => g.key), ["pass"]);
   assert.deepEqual(groupReview([]), []);
   assert.deepEqual(groupReview(undefined), []);
+});
+
+test("fileChanges: one entry per file, tracked ones with their lines (a binary one has none) and then the ones git does not follow yet", () => {
+  const numstat = "10\t2\tsrc/a.js\n3\t0\tsrc/b.js\n-\t-\tlogo.png\n";
+  const status = " M src/a.js\n?? notes.md\n?? tmp/\n";
+  assert.deepEqual(fileChanges(numstat, status), [
+    { path: "src/a.js", add: 10, del: 2, untracked: false },
+    { path: "src/b.js", add: 3, del: 0, untracked: false },
+    { path: "logo.png", add: null, del: null, untracked: false },
+    { path: "notes.md", add: null, del: null, untracked: true },
+    { path: "tmp/", add: null, del: null, untracked: true },
+  ]);
+  assert.deepEqual(fileChanges("", ""), []);
+  assert.deepEqual(fileChanges(undefined, undefined), []);
+  // it counts the same files diffStat counts
+  assert.equal(fileChanges(numstat, status).filter((f) => !f.untracked).length, diffStat(numstat, status).files);
+  assert.equal(fileChanges(numstat, status).filter((f) => f.untracked).length, diffStat(numstat, status).untracked);
+});
+
+test("shortPath: the end of a long path, which is the part that tells the files apart", () => {
+  assert.equal(shortPath("src/a.js", 30), "src/a.js");
+  assert.equal(shortPath("mods/tabi-review/lib.test.mjs", 20), "…/lib.test.mjs");
+  assert.equal(shortPath("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.js", 12), "…aaaaaaaa.js");
+  assert.equal(shortPath("", 10), "");
+});
+
+test("daySummary: what ended in the last 24 hours, whether or not it was reviewed: how many, what the checks said, and by which agent", () => {
+  const now = 100 * DAY;
+  const list = [
+    rec({ id: "1", finishedAt: now - 1000 }),
+    rec({ id: "2", finishedAt: now - 2000, check: { state: "fail", tail: "x" }, agent: "Codex" }),
+    rec({ id: "3", finishedAt: now - 3000, verify: null, check: null, reviewed: true }),
+    rec({ id: "4", finishedAt: now - 2 * DAY }), // too old
+    rec({ id: "5", status: "running", finishedAt: undefined }), // not ended
+    rec({ id: "6", finishedAt: now - 4000, agent: "Codex" }),
+  ];
+  assert.deepEqual(daySummary(list, now), { total: 4, pass: 2, fail: 1, none: 1, running: 0, reviewed: 1, agents: [["Claude Code", 2], ["Codex", 2]] });
+  assert.deepEqual(daySummary([], now), { total: 0, pass: 0, fail: 0, none: 0, running: 0, reviewed: 0, agents: [] });
+  assert.deepEqual(daySummary(undefined, now).total, 0);
+});
+
+test("summaryText: the day in one line, only with what there is, and empty when nothing ended", () => {
+  const s = { total: 4, pass: 2, fail: 1, none: 1, running: 0, reviewed: 1, agents: [["Claude Code", 2], ["Codex", 2]] };
+  assert.equal(summaryText(s), "Hoy: 4 tareas · 2 ✓ · 1 ✗ · 1 sin comprobación · 1 revisada · Claude Code 2 · Codex 2");
+  assert.equal(summaryText({ total: 1, pass: 1, fail: 0, none: 0, running: 0, reviewed: 0, agents: [["Codex", 1]] }), "Hoy: 1 tarea · 1 ✓ · Codex 1");
+  assert.equal(summaryText({ total: 0, pass: 0, fail: 0, none: 0, running: 0, reviewed: 0, agents: [] }), "");
+});
+
+test("parseQueue: the same entries as tabi-party reads (a copy of it), and the ones waiting go oldest first", () => {
+  const e = (id, createdAt, extra = {}) => ({ id, createdAt, usageId: "claude", name: "Claude Code", task: `t${id}`, command: "tab.new", args: { name: "K", argv: ["claude"] }, record: { id }, ...extra });
+  for (const x of [e("a", 1), e("b", 2, { command: "pane.close" }), e("c", 3, { args: null }), e("d", 4, { usageId: "" })]) {
+    assert.deepEqual(parseQueue(JSON.stringify(x)), party.parseQueue(JSON.stringify(x)));
+  }
+  assert.equal(parseQueue("nope"), null);
+  assert.deepEqual(sortQueue([e("b", 20), e("a", 10), e("c", 30)]).map((x) => x.id), ["a", "b", "c"]);
+  assert.deepEqual(sortQueue(undefined), []);
 });

@@ -216,14 +216,32 @@ export function handoffPrompt({ task, result, from }) {
 }
 
 /**
+ * What a reviewer is told: read the work of another agent without changing it, with the task, what that agent said and what its check
+ * found. One line, because it goes in as the first message of the agent.
+ */
+export function reviewPrompt({ task, result, from, verify, check }) {
+  const who = oneLine(from) || "otro agente";
+  const last = oneLine(result).slice(0, 300);
+  const ran = oneLine(verify);
+  const found = !ran || !check || check.state === "running" ? ""
+    : check.state === "pass" ? ` La comprobación (${ran}) pasó${check.tail ? `: ${oneLine(check.tail).slice(0, 120)}` : ""}.`
+    : ` La comprobación (${ran}) falló${check.tail ? `: ${oneLine(check.tail).slice(0, 120)}` : ""}.`;
+  return `Revisa el trabajo que hizo ${who} en esta tarea, sin modificar ningún archivo. Tarea original: ${oneLine(task)}.`
+    + `${last ? ` Lo que dijo ${who}: ${last}` : ""}${found}`
+    + " Mira git status y git diff, busca errores, casos sin cubrir y cambios que la tarea no pedía, y responde con una lista corta de hallazgos (archivo y línea) y si lo darías por bueno.";
+}
+
+/**
  * The tab to open and the record to save to go on with a task in another agent: the same space and folder (the checkout of the worktree
  * when there was one), the same check command, and the flags chosen for that agent with the gear. Null without a task or an agent.
  */
-export function handoffLaunch({ rec, from, agent, space, folder, prefs, now, rnd }) {
+export function handoffLaunch({ kind, rec, from, agent, space, folder, prefs, now, rnd }) {
   if (!rec?.task || !agent) return null;
-  const args = { name: agent.name, argv: launchArgv(prefKey(agent.key), agent.argv, prefs), task: handoffPrompt({ task: rec.task, result: rec.result, from }) };
+  const review = kind === "review"; // another agent reads the work instead of going on with it
+  const task = review ? reviewPrompt({ task: rec.task, result: rec.result, from, verify: rec.verify, check: rec.check }) : handoffPrompt({ task: rec.task, result: rec.result, from });
+  const args = { name: agent.name, argv: launchArgv(prefKey(agent.key), agent.argv, prefs), task };
   if (space) args.space = space;
   if (folder) args.folder = folder;
-  const record = newTaskRecord({ task: `→ ${rec.task}`, agent, character: null, branch: rec.branch, folder: folder ?? rec.folder, machine: rec.machine, now, rnd, verify: rec.verify });
+  const record = newTaskRecord({ task: `${review ? "審" : "→"} ${rec.task}`, agent, character: null, branch: rec.branch, folder: folder ?? rec.folder, machine: rec.machine, now, rnd, verify: review ? null : rec.verify });
   return { command: "tab.new", args, record };
 }
