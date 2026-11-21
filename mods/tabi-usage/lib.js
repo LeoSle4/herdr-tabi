@@ -64,6 +64,20 @@ export function afterReading(prev, now, outcome) {
     checkedAt: now + (outcome.extraWaitMs ?? 0), error: outcome.error, denied: !!outcome.denied };
 }
 
+const EXPIRED_PREFIX = "token por renovar";
+
+/**
+ * What a meter says when the access token of Claude has expired. The login itself is fine (it lasts weeks): the token lasts hours and
+ * Claude Code renews it on the next request of that account, so the person is told to use it, not that the session is lost.
+ */
+export function expiredMessage(name) {
+  return `${EXPIRED_PREFIX} · usa ${name || "esa cuenta"} y haz clic aquí`;
+}
+
+export function isExpiredMessage(text) {
+  return typeof text === "string" && text.startsWith(EXPIRED_PREFIX);
+}
+
 /** A window that has reset since the last good reading no longer says what it said. */
 export function windowView(w, entry, now) {
   const gone = entry.error && w.resets != null && w.resets <= now;
