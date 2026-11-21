@@ -27,6 +27,16 @@ export function rows(items, size) {
 }
 
 /**
+ * Rows of the same length where possible: 7 characters with room for 7 are one row; 7 with room for 5 are 4 + 3, never 5 + 2; four
+ * agents with room for 3 are a 2 x 2 grid. The caller pads a short row so the cells keep their width.
+ */
+export function balancedRows(items, max) {
+  if (!items.length) return [];
+  const count = Math.ceil(items.length / max);
+  return rows(items, Math.ceil(items.length / count));
+}
+
+/**
  * What to run when the person confirms: the tab.new command (a tab named after the character, or the agent, with the agent
  * running and the task as its first message) and the portrait to give to the agent that appears. null without an agent.
  */
@@ -48,8 +58,24 @@ export function slugName(name) {
 }
 
 /** The branch of a task in its own worktree: tabi/<character or agent>-<id>. */
-export function branchFor(character, agent, id) {
-  return `tabi/${slugName(character?.name ?? agent?.name)}-${id}`;
+/** The first words of a task as a piece of a branch name: "di hola en una línea" -> "di-hola-en-una" ("" when there is nothing to say). */
+export function slugWords(task, words = 4, max = 28) {
+  const parts = String(task ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return parts.slice(0, words).join("-").slice(0, max).replace(/-+$/g, "");
+}
+
+/**
+ * The branch of a task: tabi/<character or agent>-<what the task says>, readable at a glance in the list of spaces. A number is added
+ * only when that branch already exists (`taken` has the names of the branches there are), and it is the first free one.
+ */
+export function branchFor(character, agent, task, taken = []) {
+  const who = slugName(character?.name ?? agent?.name);
+  const what = slugWords(task);
+  const base = `tabi/${what ? `${who}-${what}` : who}`;
+  if (!taken.includes(base)) return base;
+  let n = 2;
+  while (taken.includes(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
 }
 
 /** The agents that take their first message as the last argument of the command (`claude "<prompt>"`, `codex "<prompt>"`). */

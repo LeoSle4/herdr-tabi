@@ -10,9 +10,9 @@
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
-import { agents, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
+import { agents, spaces, settings, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, characterName, subtitle, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -28,8 +28,12 @@ const powershell = (...args) =>
 
 const W = 216;
 const H = 64;
+const CH = 44; // a compact card: the agent of a worktree
+const INDENT = 24; // what the tree takes on the left: its line and the branch into each card
+const GAP = 4; // between the cards of a tree
 const TEXT_W = 141;
 const PORTRAIT = 34;
+const CP = 26; // the portrait of a compact card
 const MAX_H = 360;
 
 function sizeOf(node, id) {
@@ -277,6 +281,10 @@ export default class TabiParty extends View {
     cx.spawn(async () => { setShared("tabi.party", out); });
   }
 
+  spaceOf(a) {
+    return spaces().find((x) => x.id === a.space);
+  }
+
   card(a, t, name, account) {
     const s = statusInfo(a.status);
     const accent = t[s.accent];
@@ -309,6 +317,49 @@ export default class TabiParty extends View {
       .child(svg("mods/tabi-party/cut-line.svg").absolute().top(0).right(0).w(14).h(H).text_color(t.input));
   }
 
+  /**
+   * The agent of a worktree: smaller than a card. Round portrait, name, status kanji and, under the name, the icon of a branch and its
+   * name; the task and the repo are in the tooltip. `width` is a card's, less what the tree takes on the left when it hangs from one.
+   */
+  compactCard(a, t, name, account, wt, width) {
+    const s = statusInfo(a.status);
+    const accent = t[s.accent];
+    const thumb = this.thumbs.get(this.assign[this.idOf(a)])?.path;
+    const portrait = div().relative().w(CP).h(CP).flex_none().rounded_full().bg(t.raised)
+      .flex().items_center().justify_center()
+      .child(thumb ? image(thumb).w(CP).h(CP) : svg("mods/tabi-party/person.svg").size(14).text_color(t.dim))
+      .when(Boolean(thumb), (el) => el.child(svg("mods/tabi-party/circle-mask.svg").absolute().top(0).left(0).w(CP).h(CP).text_color(t.surface)));
+    return div().id(`card-${a.address}`).relative().w(width).h(CH).flex_none().bg(t.surface)
+      .border_1().border_color(t.border)
+      .hover((x) => x.border_color(t.input))
+      .tooltip(`${wt.repo} · ${wt.checkout} · ${taskLine(a)}${name !== account ? ` · ${account}` : ""}`)
+      .on_click(() => run("pane.focus", { pane: a.pane }))
+      .child(div().absolute().top(0).left(0).w(2).h(CH).bg(accent))
+      .child(h_flex().h_full().items_center().gap(8).pl(12).pr(10)
+        .child(portrait)
+        .child(v_flex().flex_1().min_w(0).gap(1)
+          .child(h_flex().justify_between().items_baseline().gap(6)
+            .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.focused ? t.foreground : t.muted).child(name))
+            .child(div().flex_none().text_size(12).text_color(accent).child(s.kanji)))
+          .child(h_flex().gap(4).items_center()
+            .child(svg("mods/workspace-chrome/branch.svg").size(10).flex_none().text_color(t.accent))
+            .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).child(wt.branch)))));
+  }
+
+  /** The worktree agents of a project, as a tree: a vertical line down the left and a short branch into each compact card. */
+  branches(children, t, names) {
+    const row = CH + GAP;
+    return v_flex().w(W).children(children.map((c, i) => {
+      const last = i === children.length - 1;
+      const name = cardName(this.assign[this.idOf(c.agent)], names[c.agent.address]);
+      return h_flex().w_full().h(row)
+        .child(div().relative().w(INDENT).h(row).flex_none()
+          .child(div().absolute().top(0).left(10).w(1).h(last ? GAP + CH / 2 : row).bg(t.input))
+          .child(div().absolute().top(GAP + CH / 2).left(10).w(INDENT - 10).h(1).bg(t.input)))
+        .child(v_flex().pt(GAP).flex_none().child(this.compactCard(c.agent, t, name, names[c.agent.address], c.wt, W - INDENT)));
+    }));
+  }
+
   render(cx) {
     const t = theme();
     const list = agents();
@@ -317,11 +368,16 @@ export default class TabiParty extends View {
     const names = accountNames(list, detected);
     const body = v_flex().gap(8).px(12).pb(12);
     this.publish(list, names, cx);
-    for (const a of list) {
+    // The tree: an agent of a worktree hangs from the first agent of its project (same repo, same machine).
+    const nodes = groupAgents(list, (a) => this.spaceOf(a), worktreesRoot(settings(), home()));
+    for (const node of nodes) {
+      const a = node.agent;
+      const name = cardName(this.assign[this.idOf(a)], names[a.address]);
       const tail = this.subRows(a, t);
       body.child(v_flex().id(`group-${a.address}`).flex_none()
-        .child(this.card(a, t, cardName(this.assign[this.idOf(a)], names[a.address]), names[a.address]))
-        .when(Boolean(tail), (el) => el.child(tail)));
+        .child(node.wt ? this.compactCard(a, t, name, names[a.address], node.wt, W) : this.card(a, t, name, names[a.address]))
+        .when(Boolean(tail), (el) => el.child(tail))
+        .when(node.children.length > 0, (el) => el.child(this.branches(node.children, t, names))));
     }
     if (!list.length) body.child(div().py(8).text_size(11.5).font_light().text_color(t.dim).child("Ningún agente activo."));
     return v_flex().id("tabi-party").size_full().bg(t.chrome).overflow_hidden()
