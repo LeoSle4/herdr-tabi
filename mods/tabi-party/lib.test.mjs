@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
+import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf, worktreeIndex, parseQueue, queueDue, QUEUE_FRESH_MS } from "./lib.js";
 
 test("status: working 働 cream, blocked 待 amber, idle and done 済 gray", () => {
   assert.deepEqual([statusInfo("working").kanji, statusInfo("working").accent], ["働", "solid"]);
@@ -421,4 +421,85 @@ test("checkNotice: who it is about, whether it passed, and what the command prin
   assert.deepEqual(checkNotice(r, { state: "fail", tail: "2 failed" }), { title: "Koyun: la comprobación falló ✗", body: "node --test · 2 failed", level: "error" });
   assert.equal(checkNotice(rec({ character: null, agent: "Codex", verify: "x" }), { state: "pass", tail: "" }).title, "Codex: la comprobación pasó ✓");
   assert.equal(checkNotice(r, { state: "pass", tail: "" }).body, "node --test");
+});
+
+test("worktreeInfo: a space that started elsewhere but is named after a worktree checkout is that worktree (when the folders of the worktrees are known)", () => {
+  const root = "/h/Projects/worktrees";
+  const known = { "herdr-tabi": ["tabi-mai-f353", "tabi-mai-verficacion"], PitLane: ["fix-x"] };
+  const space = { name: "tabi-mai-verficacion", named: false, folder: "/h/Projects/herdr-tabi", branch: "tabi/mai-verficacion" };
+  assert.deepEqual(worktreeInfo(space, root, known), { repo: "herdr-tabi", checkout: "tabi-mai-verficacion", branch: "tabi/mai-verficacion" });
+  // without the list, or when somebody named the space, or when the name is not a checkout, or when two repos have it: not a worktree
+  assert.equal(worktreeInfo(space, root), null);
+  assert.equal(worktreeInfo({ ...space, named: true }, root, known), null);
+  assert.equal(worktreeInfo({ ...space, name: "herdr-tabi" }, root, known), null);
+  assert.equal(worktreeInfo(space, root, { a: ["tabi-mai-verficacion"], b: ["tabi-mai-verficacion"] }), null);
+  // the folder still wins when it is inside the worktrees folder
+  assert.deepEqual(worktreeInfo({ ...space, folder: "/h/Projects/worktrees/PitLane/fix-x", name: "fix-x" }, root, known), { repo: "PitLane", checkout: "fix-x", branch: "tabi/mai-verficacion" });
+});
+
+test("groupAgents: with the worktrees known, an agent whose space started in the repo but is named after a worktree hangs from the agent of its project", () => {
+  const root = "/h/Projects/worktrees";
+  const known = { "herdr-tabi": ["tabi-mai-verficacion"] };
+  const spaces = {
+    a: { id: "a", name: "herdr-tabi", named: false, folder: "/h/Projects/herdr-tabi", machine: null, branch: "main" },
+    b: { id: "b", name: "tabi-mai-verficacion", named: false, folder: "/h/Projects/herdr-tabi", machine: null, branch: "tabi/mai-verficacion" },
+  };
+  const list = [{ address: "1", space: "a" }, { address: "2", space: "b" }];
+  const nodes = groupAgents(list, (x) => spaces[x.space], root, known);
+  assert.equal(nodes.length, 1);
+  assert.deepEqual(nodes[0].children.map((c) => c.agent.address), ["2"]);
+  assert.equal(nodes[0].children[0].wt.repo, "herdr-tabi");
+  // the call without the list behaves as before
+  assert.equal(groupAgents(list, (x) => spaces[x.space], root).length, 2);
+});
+
+test("worktreeIndex: from the folders under the worktrees folder to { repo: [checkouts] }, ignoring files", () => {
+  assert.deepEqual(worktreeIndex([{ name: "herdr-tabi", children: [{ name: "a", dir: true }, { name: "b", dir: true }, { name: "x.txt", dir: false }] }, { name: "empty", children: [] }]), { "herdr-tabi": ["a", "b"] });
+  assert.deepEqual(worktreeIndex([]), {});
+  assert.deepEqual(worktreeIndex(undefined), {});
+});
+
+const NOW = 1_000_000_000_000;
+const entry = (extra = {}) => ({ id: "t1", createdAt: NOW - 5000, usageId: "claude", name: "Claude Code", task: "arregla el login", command: "tab.new", args: { name: "Claude Code", argv: ["claude"], task: "arregla el login", space: "spA" }, record: { id: "t1", task: "arregla el login", tab: "Koyun", startedAt: NOW - 5000, status: "running" }, ...extra });
+const reading = (used, extra = {}) => ({ windows: [{ label: "5h", used, resets: NOW + 3600_000 }, { label: "weekly", used: 10, resets: NOW + 9e8 }], okAt: NOW - 60_000, error: null, ...extra });
+
+test("parseQueue: a saved entry, or null when it is not a usable one (nothing that is not a tab.new is ever run)", () => {
+  assert.deepEqual(parseQueue(JSON.stringify(entry())), entry());
+  assert.equal(parseQueue("nope"), null);
+  assert.equal(parseQueue(JSON.stringify(entry({ command: "pane.close" }))), null);
+  assert.equal(parseQueue(JSON.stringify(entry({ args: null }))), null);
+  assert.equal(parseQueue(JSON.stringify(entry({ record: null }))), null);
+  assert.equal(parseQueue(JSON.stringify(entry({ usageId: "" }))), null);
+  assert.equal(parseQueue(JSON.stringify([entry()])), null);
+});
+
+test("queueDue: an entry goes when its account is at or under 85 %, with a recent reading; the rest waits", () => {
+  const spaces = new Set(["spA"]);
+  const go = (e, usage, last = {}) => queueDue([e], usage, NOW, spaces, last);
+  assert.deepEqual(go(entry(), { claude: reading(40) }).launch.map((e) => e.id), ["t1"]);
+  assert.deepEqual(go(entry(), { claude: reading(85) }).launch.map((e) => e.id), ["t1"]); // at the limit is not over it
+  assert.deepEqual(go(entry(), { claude: reading(86) }).launch, []);
+  assert.deepEqual(go(entry(), { claude: reading(86) }).waiting.map((e) => e.id), ["t1"]);
+  assert.deepEqual(go(entry(), {}).launch, []); // no reading of that account
+  assert.deepEqual(go(entry(), { claude: reading(10, { okAt: NOW - QUEUE_FRESH_MS - 1 }) }).launch, []); // an old reading is not trusted
+  assert.deepEqual(go(entry(), { claude: reading(10, { okAt: null }) }).launch, []);
+  assert.deepEqual(go(entry(), { claude: { ...reading(10), error: "boom" } }).launch.length, 0); // the last reading failed
+  assert.deepEqual(go(entry(), { claude: reading(99, { windows: [{ label: "5h", used: 99, resets: NOW - 1 }] }) }).launch.map((e) => e.id), ["t1"]); // the window has renewed since a fresh reading
+});
+
+test("queueDue: another account does not decide it, a lost space is reported and never launched, and one goes per account until a new reading", () => {
+  const spaces = new Set(["spA"]);
+  const usage = { claude: reading(40), codex: reading(95) };
+  const a = entry({ id: "a", createdAt: NOW - 3000 });
+  const b = entry({ id: "b", createdAt: NOW - 2000 });
+  const c = entry({ id: "c", usageId: "codex" });
+  const lost = entry({ id: "l", args: { ...entry().args, space: "gone" } });
+  const noSpace = entry({ id: "n", createdAt: NOW - 1000, args: { name: "Claude Code", argv: ["claude"] } }); // it was opened without a space: it goes where Herdr puts it
+  const r = queueDue([b, c, lost, a, noSpace], usage, NOW, spaces, {});
+  assert.deepEqual(r.launch.map((e) => e.id), ["a"]); // oldest first, one per account
+  assert.deepEqual(r.waiting.map((e) => e.id).sort(), ["b", "c", "n"]);
+  assert.deepEqual(r.lost.map((e) => e.id), ["l"]);
+  // after a launch the next one waits for a reading made after it (the reading of these tests is 60 s old)
+  assert.deepEqual(queueDue([b], usage, NOW, spaces, { claude: NOW - 30_000 }).launch, []);
+  assert.deepEqual(queueDue([b], usage, NOW, spaces, { claude: NOW - 120_000 }).launch.map((e) => e.id), ["b"]);
 });
