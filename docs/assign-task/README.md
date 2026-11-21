@@ -47,6 +47,11 @@ did, so the task you assign can be followed from the cards.
 The dialog opens with a cover: the picture of the space you are in (the same one behind the window; `docs` of tabi-backdrop), the
 title over it and a fade into the dialog. With no pictures there is no cover.
 
+## Model and effort
+
+Under the agents, "Modelo y esfuerzo: opus · high" says what the agent will start with. It is what you chose with the ⚙ of the panel
+(`docs/launch-options`), and it is applied to the command, also in a worktree. Change it there.
+
 ## Quota warning
 
 Under the agents, an amber line appears when the **5-hour window** of the account you chose is above **85 %**: "Claude Code lleva el

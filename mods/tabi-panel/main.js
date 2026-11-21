@@ -13,7 +13,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, panes, focused, exec, run, openOverlay, props, shared, layout, appHome, settings, theme, checking, window as herdrWindow } from "herdr";
-import { accountNames, pending, agoShort, changeSummary, parseLastCommit, parseAhead, filesLabel } from "./lib.js";
+import { accountNames, pending, agoShort, changeSummary, parseLastCommit, parseAhead, filesLabel, parsePrefs, launchArgv, summary } from "./lib.js";
 
 const AMBER = "#d9a441";
 const AMBER_SOFT = "#d9a44166";
@@ -39,6 +39,8 @@ const keyOf = () => JSON.stringify(location());
 
 export default class TabiPanel extends View {
   init(_props, cx) {
+    this.prefs = {}; // the model and effort each agent starts with (data/tabi/launch.json, chosen with the gear)
+    this.prefsRev = null;
     this.git = null; // null: not read yet; { repo: false } or { repo: true, branch, files, add, del, last, ahead }
     this.key = null;
     this.loading = false;
@@ -181,6 +183,33 @@ export default class TabiPanel extends View {
       .text_size(11.5).text_color(t.muted).cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground)).on_click(onClick).child(label);
   }
 
+  /** Reads what the gear saved; called again when tabi-launch says it changed ("tabi.launch.rev"). */
+  loadPrefs(cx) {
+    cx.spawn(async (cx) => {
+      try { this.prefs = parsePrefs(await fs.readFile(`${appHome()}/data/tabi/launch.json`, "utf8")); } catch { this.prefs = {}; }
+      cx.notify();
+    });
+  }
+
+  /** What "+ <agent>" runs: its command with the model and effort chosen for it. */
+  argvFor(key, argv) {
+    return launchArgv(key, argv, this.prefs);
+  }
+
+  /** A start button with its gear (model and effort); the gear is lit when something is chosen, and the tooltip says what. */
+  startButton(id, key, name, argv, space, t) {
+    const chosen = this.prefs[key];
+    return h_flex().flex_1().min_w(0).gap(2)
+      .child(div().id(id).flex_1().min_w(0).h(28).flex().items_center().justify_center().border(0.5).border_color(t.input).bg(t.raised)
+        .text_size(11.5).text_color(t.muted).cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground))
+        .tooltip(chosen ? `${name} · ${summary(chosen)}` : name)
+        .on_click(() => run("tab.new", { space, argv: this.argvFor(key, argv) })).child(div().truncate().child(`+ ${name}`)))
+      .child(div().id(`${id}-gear`).w(24).flex_none().h(28).flex().items_center().justify_center().border(0.5).border_color(chosen ? t.accent : t.input).bg(t.raised)
+        .text_size(12).text_color(chosen ? t.accent : t.dim).cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground))
+        .tooltip("Modelo y esfuerzo")
+        .on_click(() => openOverlay({ mod: "tabi-launch", kind: "dialog", width: 460, height: 600, props: { key, name } })).child("⚙"));
+  }
+
   /** Extra Claude accounts (wrappers that set CLAUDE_CONFIG_DIR), as tabi-usage publishes them. */
   extraAccounts() {
     return (shared("tabi.accounts") ?? []).filter((a) => !a.default);
@@ -188,13 +217,16 @@ export default class TabiPanel extends View {
 
   iniciar(t) {
     const space = location().space;
-    const start = (argv) => () => run("tab.new", { space, argv });
+    const cells = [
+      this.startButton("start-claude", "claude", "claude", ["claude"], space, t),
+      ...this.extraAccounts().map((a) => this.startButton(`start-${a.name}`, `account-${a.name}`, a.name, [a.bin], space, t)),
+      this.startButton("start-codex", "codex", "codex", ["codex"], space, t),
+      this.button("start-changes", "cambios", () => { run("layout.select", { stack: "panel-body", child: "changes" }); run("layout.show", { id: "panel" }); }, t),
+    ];
+    // Two cells a row, all the same width (an odd one out leaves an empty cell), so the grid is even whatever the number of accounts.
+    const lines = Array.from({ length: Math.ceil(cells.length / 2) }, (_, i) => cells.slice(i * 2, i * 2 + 2));
     return this.card("tabi-start", "始", "iniciar", t)
-      .child(h_flex().flex_wrap().gap(6)
-        .child(this.button("start-claude", "+ claude", start(["claude"]), t))
-        .children(this.extraAccounts().map((a) => this.button(`start-${a.name}`, `+ ${a.name}`, start([a.bin]), t)))
-        .child(this.button("start-codex", "+ codex", start(["codex"]), t))
-        .child(this.button("start-changes", "cambios", () => { run("layout.select", { stack: "panel-body", child: "changes" }); run("layout.show", { id: "panel" }); }, t)));
+      .child(v_flex().gap(6).children(lines.map((row) => h_flex().gap(6).children(row.length === 2 ? row : [...row, div().flex_1().min_w(0)]))));
   }
 
   /** The one-row version: counts and the two start buttons; the label opens the full panel in a popup. */
@@ -203,9 +235,9 @@ export default class TabiPanel extends View {
     const waiting = pending(agents()).length;
     const space = location().space;
     const small = (text, color) => div().flex_none().text_size(10).text_color(color ?? t.muted).child(text);
-    const mini = (id, label, argv) => div().id(id).flex_none().h(20).px(4).flex().items_center().border(0.5).border_color(t.input).bg(t.raised)
+    const mini = (id, label, key, argv) => div().id(id).flex_none().h(20).px(4).flex().items_center().border(0.5).border_color(t.input).bg(t.raised)
       .text_size(10).text_color(t.muted).cursor_pointer().hover((x) => x.bg(t.hover).text_color(t.foreground))
-      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(() => run("tab.new", { space, argv })).child(label);
+      .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).on_click(() => run("tab.new", { space, argv: this.argvFor(key, argv) })).child(label);
     return h_flex().id("tabi-panel-compact").h(COMPACT_H).flex_none().items_center().gap(4).px(8).cursor_pointer()
       .hover((x) => x.bg(t.hover)).on_click(() => this.openFull())
       .child(h_flex().flex_1().min_w(0).items_center().gap(4).overflow_hidden()
@@ -214,13 +246,15 @@ export default class TabiPanel extends View {
         .child(small(g?.repo ? `道 ${g.files}` : "道 —"))
         .when(g?.repo && g.files > 0, (el) => el.child(small(`+${g.add}`, t.ansi2)).child(small(`−${g.del}`, t.ansi1))))
       .child(small("始", t.muted))
-      .child(mini("compact-claude", "+claude", ["claude"]))
-      .children(this.extraAccounts().map((a) => mini(`compact-${a.name}`, `+${a.name.replace(/^claude/, "c")}`, [a.bin])))
-      .child(mini("compact-codex", "+codex", ["codex"]));
+      .child(mini("compact-claude", "+claude", "claude", ["claude"]))
+      .children(this.extraAccounts().map((a) => mini(`compact-${a.name}`, `+${a.name.replace(/^claude/, "c")}`, `account-${a.name}`, [a.bin])))
+      .child(mini("compact-codex", "+codex", "codex", ["codex"]));
   }
 
   render(cx) {
     if (keyOf() !== this.key) this.refresh(cx);
+    const rev = shared("tabi.launch.rev") ?? 0; // reading it re-renders this copy when the gear saved something
+    if (rev !== this.prefsRev) { this.prefsRev = rev; this.loadPrefs(cx); }
     const t = theme();
     const root = v_flex().id("tabi-panel").size_full().bg(t.chrome).border_t(0.5).border_color(t.border).overflow_hidden().justify_end()
       .on_size_change((size) => { this.outerH = Math.round(size.height); });
