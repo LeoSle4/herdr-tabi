@@ -15,7 +15,7 @@ import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { exec, appHome, home, notify, theme, shared, setShared, checking, window as herdrWindow } from "herdr";
-import { mayRead, minutesUntilNext, canReread, pickCredential, keychainOutcome, tokenExpired, parseClaudeUsage, afterReading,
+import { mayRead, minutesUntilNext, canReread, pickCredential, keychainOutcome, tokenExpired, parseClaudeUsage, afterReading, expiredMessage, isExpiredMessage,
   windowView, usageLevel, ageLabel, renewShort, renewTooltip, ringFile, buildAccounts, buildWindowsAccounts, windowsWrapperName, keychainService, displayName,
   RATE_LIMIT_BACKOFF_MS, MIN_INTERVAL_MS } from "./lib.js";
 
@@ -151,7 +151,7 @@ async function claudeEmail(acc) {
 
 async function readClaude(acc) {
   let c = await credential(acc);
-  const expired = { ok: false, error: "sesión caducada: abre Claude Code y haz clic aquí" };
+  const expired = { ok: false, error: expiredMessage(acc.default ? "Claude" : acc.name) };
   // An expired login is read from the Keychain again (once); the person may be asked for permission again.
   if (c.state === "ok" && tokenExpired(c, Date.now())) c = await reread(acc, c);
   if (c.state === "denied") return { ok: false, denied: true, error: "sin acceso" };
@@ -270,7 +270,7 @@ export default class TabiUsage extends View {
       return notify({ title: "Uso actualizado hace poco", body: `Próxima lectura en ${next} min`, level: "info" });
     }
     // A click on an expired Claude meter is the person asking again: allow one more Keychain read.
-    for (const m of meters()) if (m.account && cache?.[m.id]?.error?.startsWith("sesión caducada")) rereadFor.delete(m.id);
+    for (const m of meters()) if (m.account && isExpiredMessage(cache?.[m.id]?.error)) rereadFor.delete(m.id);
     this.tick(cx);
   }
 

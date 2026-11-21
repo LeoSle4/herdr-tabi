@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mayRead, minutesUntilNext, canReread, pickCredential, keychainOutcome, tokenExpired, parseClaudeUsage, afterReading, windowView,
+import { mayRead, minutesUntilNext, canReread, pickCredential, keychainOutcome, tokenExpired, parseClaudeUsage, afterReading, windowView, expiredMessage, isExpiredMessage,
   untilReset, MIN_INTERVAL_MS, RATE_LIMIT_BACKOFF_MS } from "./lib.js";
 
 test("never reads more often than every 5 minutes, and a failure counts as a reading", () => {
@@ -193,4 +193,21 @@ test("keychain service: plain for the default, suffixed with the dir hash for th
 test("names and tags", () => {
   assert.deepEqual(["claude", "claude2", "codex"].map(displayName), ["Claude", "Claude2", "Codex"]);
   assert.deepEqual(["claude", "claude2", "codex"].map(shortTag), ["c1", "c2", "co"]);
+});
+
+test("expiredMessage: says the token needs renewing, not that the session is lost, and names the account to use", () => {
+  const m = expiredMessage("Claude2");
+  assert.match(m, /token/);
+  assert.match(m, /Claude2/);
+  assert.doesNotMatch(m, /sesión caducada/);
+  assert.match(expiredMessage(undefined), /token/); // no name: still a sentence
+});
+
+test("isExpiredMessage: recognises that message for any account, and nothing else", () => {
+  assert.equal(isExpiredMessage(expiredMessage("Claude2")), true);
+  assert.equal(isExpiredMessage(expiredMessage(undefined)), true);
+  assert.equal(isExpiredMessage("sin acceso"), false);
+  assert.equal(isExpiredMessage("HTTP 500"), false);
+  assert.equal(isExpiredMessage(null), false);
+  assert.equal(isExpiredMessage(undefined), false);
 });
