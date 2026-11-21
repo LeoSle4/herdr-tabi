@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
+import { statusInfo, worktreesRoot, worktreeOf, worktreeInfo, baseName, projectName, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, characterName, cardName, portraitNames, taskLine, accountNames, subtitle, isImage, pickPortrait, thumbName, cropSide, parseFolder, reconcilePortraits, configDirOf, accountOf } from "./lib.js";
 
 test("status: working 働 cream, blocked 待 amber, idle and done 済 gray", () => {
   assert.deepEqual([statusInfo("working").kanji, statusInfo("working").accent], ["働", "solid"]);
@@ -273,4 +273,88 @@ test("groupAgents: the project is found by the name of the space, not by the fol
 test("groupAgents: a renamed space is matched by its folder", () => {
   const spaces = { s1: sp("s1", "/h/Projects/herdr-tabi", { name: "trabajo", named: true }), w1: wtSpace("w1", "herdr-tabi", "x") };
   assert.deepEqual(view(groupAgents([ag("a", "s1"), ag("mai", "w1")], (a) => spaces[a.space], ROOT)), [["a", ["mai"], false]]);
+});
+
+const rec = (extra = {}) => ({ id: "a", task: "di hola", agent: "Claude Code", agentKey: "claude", character: "Koyun", tab: "Koyun", branch: null, folder: "/p", machine: null, startedAt: 1000, status: "running", finishedAt: null, result: null, ...extra });
+const H = 3600 * 1000;
+
+test("parseTask: a saved record, or null when it is not one", () => {
+  assert.deepEqual(parseTask(JSON.stringify(rec())), rec());
+  assert.equal(parseTask("not json"), null);
+  assert.equal(parseTask("[]"), null);
+  assert.equal(parseTask(JSON.stringify({ ...rec(), task: "" })), null);
+  assert.equal(parseTask(JSON.stringify({ ...rec(), tab: undefined })), null);
+  assert.equal(parseTask(JSON.stringify({ ...rec(), startedAt: "yesterday" })), null);
+});
+
+test("parseTask: an unknown status is read as running, and a result that is not text is dropped", () => {
+  assert.equal(parseTask(JSON.stringify({ ...rec(), status: "weird" })).status, "running");
+  assert.equal(parseTask(JSON.stringify({ ...rec(), result: 5 })).result, null);
+});
+
+test("taskFor: the latest task of that tab on that machine, from the last day", () => {
+  const list = [rec({ id: "old", startedAt: 1000 }), rec({ id: "new", startedAt: 5000 }), rec({ id: "other", tab: "Mai", startedAt: 9000 })];
+  assert.equal(taskFor(list, "Koyun", null, 6000).id, "new");
+  assert.equal(taskFor(list, "Mai", null, 6000).id, "other");
+  assert.equal(taskFor(list, "Rusita", null, 6000), null);
+});
+
+test("taskFor: another machine does not share a tab name, and an old task no longer belongs to the tab", () => {
+  const list = [rec({ machine: "msi-casa" })];
+  assert.equal(taskFor(list, "Koyun", null, 2000), null);
+  assert.equal(taskFor(list, "Koyun", "msi-casa", 2000).id, "a");
+  assert.equal(taskFor([rec()], "Koyun", null, 1000 + 25 * H), null);
+  assert.equal(taskFor([rec()], "Koyun", null, 1000 + 23 * H).id, "a");
+  assert.equal(taskFor([], "Koyun", null, 1), null);
+  assert.equal(taskFor(undefined, "Koyun", null, 1), null);
+});
+
+test("finishTask: a running task becomes done, with what the agent said if that was after it began", () => {
+  const done = finishTask(rec(), { text: "Listo: saludé.", at: 4000 }, 30000);
+  assert.deepEqual([done.status, done.finishedAt, done.result], ["done", 30000, "Listo: saludé."]);
+  assert.equal(done.task, "di hola");
+});
+
+test("finishTask: what was said before the task began is not its result; nothing said still closes it", () => {
+  assert.equal(finishTask(rec(), { text: "of the last task", at: 500 }, 30000).result, null);
+  assert.deepEqual([finishTask(rec(), null, 30000).status, finishTask(rec(), null, 30000).result], ["done", null]);
+});
+
+test("finishTask: a task that is already done is left alone", () => {
+  assert.equal(finishTask(rec({ status: "done", finishedAt: 2000, result: "x" }), { text: "y", at: 4000 }, 30000), null);
+});
+
+test("finishTask: a task that has just begun is not closed by another tab of the same name that was already done", () => {
+  assert.equal(finishTask(rec(), null, 1000 + 5000), null);
+  assert.equal(finishTask(rec(), null, 1000 + 20000).status, "done");
+});
+
+test("taskTooltip: what was asked, and what came of it once it is done", () => {
+  assert.equal(taskTooltip(rec()), "Encargo: di hola");
+  assert.equal(taskTooltip(rec({ status: "done", result: "Listo: saludé." })), "Encargo: di hola\nResultado: Listo: saludé.");
+  assert.equal(taskTooltip(rec({ status: "done", result: null })), "Encargo: di hola\nTerminó");
+  assert.equal(taskTooltip(null), "");
+});
+
+test("parseStop: what the hook recorded when the agent's turn ended, or null", () => {
+  assert.deepEqual(parseStop('{"text":"Listo.","at":4000}'), { text: "Listo.", at: 4000 });
+  assert.equal(parseStop('{"text":"","at":4000}'), null);
+  assert.equal(parseStop('{"text":"x"}'), null);
+  assert.equal(parseStop("nope"), null);
+  assert.equal(parseStop(undefined), null);
+});
+
+test("taskEnded: done always ends it; idle only after the agent was seen working, or when it has been a long time", () => {
+  const r = rec({ startedAt: 0 });
+  assert.equal(taskEnded("done", false, r, 30000), true);
+  assert.equal(taskEnded("idle", true, r, 30000), true); // seen working, now at rest: it finished and was looked at
+  assert.equal(taskEnded("idle", false, r, 30000), false); // just launched: it has not started yet
+  assert.equal(taskEnded("idle", false, r, 6 * 60000), true); // Herdr was restarted in the middle: nobody saw it work
+});
+
+test("taskEnded: an agent that works or waits for you has not ended", () => {
+  const r = rec({ startedAt: 0 });
+  assert.equal(taskEnded("working", true, r, 10 * 60000), false);
+  assert.equal(taskEnded("blocked", true, r, 10 * 60000), false);
+  assert.equal(taskEnded(undefined, true, r, 10 * 60000), false);
 });
