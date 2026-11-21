@@ -6,11 +6,13 @@
 // wears that portrait.
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, checking, window as herdrWindow } from "herdr";
-import { agentChoices, characterChoices, rows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt } from "./lib.js";
+import { run, props, closeOverlay, openOverlay, theme, knownAgents, shared, setShared, spaces, checking, window as herdrWindow } from "herdr";
+import { agentChoices, characterChoices, balancedRows, buildLaunch, branchFor, worktreeAvailable, buildWorktree, acceptsPrompt } from "./lib.js";
 
-const PORTRAIT = 34;
-const PER_ROW = 5;
+const PORTRAIT = 40; // the picture of a character; its ring makes it 48
+const FACE_W = 64; // one character: ring, name
+const FACES_PER_ROW = 7; // 484 px of room: all the characters on one row while they fit
+const AGENTS_PER_ROW = 3;
 
 export default class TabiTask extends View {
   init(_props, cx) {
@@ -19,7 +21,6 @@ export default class TabiTask extends View {
     this.agent = null; // the chosen agent's key; the first one until the person picks
     this.character = null; // the chosen portrait's file; null = whoever comes (automatic)
     this.worktree = false; // the box "En un worktree nuevo"
-    this.branchId = Math.random().toString(16).slice(2, 6); // the same all along the dialog, so the branch shown is the one made
     this.known = [];
     this.failed = false;
     this.input = InputState.new({ value: "" });
@@ -42,13 +43,18 @@ export default class TabiTask extends View {
     return agentChoices(this.known, shared("tabi.accounts"));
   }
 
+  /** The branches the spaces are on now: a new one never takes a name already in use. */
+  takenBranches() {
+    try { return spaces().map((x) => x.branch).filter(Boolean); } catch { return []; }
+  }
+
   submit() {
     const p = props() ?? {};
     const choices = this.choices();
     const agent = choices.find((a) => a.key === this.agent) ?? choices[0];
     const character = characterChoices(shared("tabi.portraits")).find((c) => c.file === this.character) ?? null;
     if (this.worktree && worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine }).ok) {
-      const branch = branchFor(character, agent, this.branchId);
+      const branch = branchFor(character, agent, this.task, this.takenBranches());
       const wt = buildWorktree({ task: this.task, agent, character, space: p.space, folder: p.folder, machine: p.machine, branch });
       if (!wt) return;
       if (wt.portrait) setShared("tabi.next-portrait", { file: wt.portrait, at: Date.now() });
@@ -67,41 +73,55 @@ export default class TabiTask extends View {
     if (e.key === "escape") { closeOverlay((props() ?? {}).overlay); cx.stop_propagation(); }
   }
 
+  /** The small heading of a section, in the tone of the cards of the panel: a kanji, then what it is ("使者 · agentes"). */
+  section(kanji, text, t) {
+    return h_flex().pt(18).pb(8).gap(6).items_baseline()
+      .child(div().text_size(12).text_color(t.muted).child(kanji))
+      .child(div().text_size(12).font_light().text_color(t.dim).child(`· ${text}`));
+  }
+
+  /** An agent: all the same width, so the grid is the same on both sides. */
   chip(id, label, selected, onClick, t) {
-    return h_flex().id(id).h(28).px(11).items_center().rounded(14).flex_none().cursor_pointer()
-      .border_1().border_color(selected ? t.accent : t.input).bg(selected ? t.selected : t.raised)
-      .text_size(12).text_color(selected ? t.foreground : t.muted)
-      .hover((s) => s.opacity(0.88)).on_click(onClick).child(label);
-  }
-
-  /** A character: its round portrait over a name; the selected one has a ring and a brighter name. */
-  face(c, selected, t, onClick) {
-    const portrait = div().relative().w(PORTRAIT).h(PORTRAIT).flex_none().rounded_full().bg(t.raised)
-      .flex().items_center().justify_center()
-      .border_1().border_color(selected ? t.accent : t.popover)
-      .child(c.thumb ? image(c.thumb).w(PORTRAIT).h(PORTRAIT) : svg("mods/tabi-party/person.svg").size(18).text_color(t.dim))
-      .when(Boolean(c.thumb), (el) => el.child(svg("mods/tabi-party/circle-mask.svg").absolute().top(0).left(0).w(PORTRAIT).h(PORTRAIT).text_color(t.popover)));
-    return v_flex().id(`face-${c.file ?? "auto"}`).items_center().gap(4).w(64).flex_none().cursor_pointer()
+    return h_flex().id(id).flex_1().min_w(0).h(34).px(10).items_center().justify_center().rounded(9).cursor_pointer()
+      .border_1().border_color(selected ? t.accent : t.border).bg(selected ? t.selected : t.surface)
+      .text_size(12.5).text_color(selected ? t.foreground : t.muted)
       .hover((s) => s.opacity(0.88)).on_click(onClick)
-      .child(portrait)
-      .child(div().w_full().truncate().text_size(11).text_color(selected ? t.foreground : t.dim).child(c.name));
+      .child(div().truncate().child(label));
   }
 
-  /** The box "En un worktree nuevo": the task gets its own branch and folder. Dim and inert where it cannot be offered. */
+  /** A character: its round portrait in a ring, and its name centered under it; the chosen one has an accent ring and a bright name. */
+  face(c, selected, t, onClick) {
+    const picture = div().relative().w(PORTRAIT).h(PORTRAIT).flex_none().rounded_full().bg(t.raised)
+      .flex().items_center().justify_center()
+      .child(c.thumb ? image(c.thumb).w(PORTRAIT).h(PORTRAIT) : svg("mods/tabi-party/person.svg").size(20).text_color(t.dim))
+      .when(Boolean(c.thumb), (el) => el.child(svg("mods/tabi-party/circle-mask.svg").absolute().top(0).left(0).w(PORTRAIT).h(PORTRAIT).text_color(selected ? t.selected : t.popover)));
+    const ring = div().w(PORTRAIT + 8).h(PORTRAIT + 8).flex_none().rounded_full().flex().items_center().justify_center()
+      .border_1().border_color(selected ? t.accent : t.border).bg(selected ? t.selected : t.popover).child(picture);
+    return v_flex().id(`face-${c.file ?? "auto"}`).w(FACE_W).flex_none().items_center().gap(6).cursor_pointer()
+      .hover((s) => s.opacity(0.88)).on_click(onClick)
+      .child(ring)
+      .child(h_flex().w_full().justify_center().child(div().truncate().text_size(11).text_color(selected ? t.foreground : t.dim).child(c.name)));
+  }
+
+  /** The box "En un worktree nuevo", as a card like those of the panel: the task gets its own branch and folder. Dim and inert where it cannot be offered. */
   worktreeBox(t, available, note) {
     const on = this.worktree && available.ok;
-    const box = div().w(16).h(16).flex_none().rounded(4).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
-      .flex().items_center().justify_center().text_size(11).text_color(t.solid_foreground).child(on ? "✓" : "");
-    return h_flex().id("task-worktree").pt(14).gap(10).items_center().when(!available.ok, (el) => el.opacity(0.5))
+    const box = div().w(18).h(18).flex_none().rounded(5).border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.background)
+      .flex().items_center().justify_center().text_size(12).text_color(t.solid_foreground).child(on ? "✓" : "");
+    return h_flex().id("task-worktree").w_full().px(14).py(12).gap(12).items_center().rounded(9)
+      .border_1().border_color(on ? t.accent : t.border).bg(t.surface)
+      .when(!available.ok, (el) => el.opacity(0.5))
       .when(available.ok, (el) => el.cursor_pointer().hover((x) => x.opacity(0.88)).on_click((_e, cx) => { this.worktree = !this.worktree; cx.notify(); }))
       .child(box)
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().text_size(12.5).text_color(t.foreground).child("En un worktree nuevo"))
-        .child(div().text_size(11).text_color(t.dim).child(available.ok ? note : available.reason)));
+        .child(div().text_size(11).font_light().text_color(t.dim).child(available.ok ? note : available.reason)))
+      .child(div().text_size(15).text_color(t.dim).child("道"));
   }
 
+  /** Cancel and Launch: the same width, side by side. */
   button(id, text, primary, action, t) {
-    return h_flex().id(id).h(32).px(14).items_center().rounded(8)
+    return h_flex().id(id).flex_1().h(38).items_center().justify_center().rounded(9)
       .border_1().border_color(primary ? t.solid : t.input).bg(primary ? t.solid : t.raised)
       .text_color(primary ? t.solid_foreground : t.foreground).text_size(12.5).font_medium().cursor_pointer()
       .hover((s) => s.opacity(0.88)).on_click(action).child(text);
@@ -110,37 +130,43 @@ export default class TabiTask extends View {
   render() {
     const t = theme();
     const p = props() ?? {};
-    const label = (text) => div().pt(14).pb(6).text_size(11.5).text_color(t.dim).child(text);
     const choices = this.choices();
     const chosen = choices.find((a) => a.key === this.agent) ?? choices[0];
     const characters = characterChoices(shared("tabi.portraits"));
     const where = String(p.folder ?? "").split(/[\\/]/).filter(Boolean).pop();
     const available = worktreeAvailable({ platform: herdrWindow()?.platform, machine: p.machine });
     const picked = characters.find((c) => c.file === this.character) ?? null;
-    const branch = branchFor(picked, chosen, this.branchId);
+    const branch = branchFor(picked, chosen, this.task, this.takenBranches());
     const note = !this.worktree ? "Su propia rama y carpeta, para que no pise tu trabajo"
       : `Rama ${branch}${this.task.trim() && chosen && !acceptsPrompt(chosen) ? ". Este agente no recibe la tarea solo: escríbela en su pestaña" : ""}`;
-    const faces = [{ file: null, name: "Al azar", thumb: null }, ...characters];
-    const agentRows = rows(choices, 3);
-    const faceRows = rows(faces, PER_ROW);
+    const faces = balancedRows([{ file: null, name: "Al azar", thumb: null }, ...characters], FACES_PER_ROW);
+    const agentRows = balancedRows(choices, AGENTS_PER_ROW);
+    // A short row is filled with empty cells (null), so every cell keeps its width and the grid stays even.
+    const pad = (row, size) => [...row, ...Array.from({ length: size - row.length }, () => null)];
     return v_flex().id("tabi-task").track_focus(this.handle).on_key_down((e, cx) => this.key(e, cx))
-      .w_full().min_h(0).p(18).bg(t.popover).text_color(t.foreground)
+      .w_full().min_h(0).px(20).pt(18).pb(20).bg(t.popover).text_color(t.foreground)
       .child(h_flex().items_center()
-        .child(div().flex_1().text_size(15).font_semibold().child("Asignar tarea"))
+        .child(h_flex().flex_1().gap(10).items_baseline()
+          .child(div().text_size(18).text_color(t.muted).child("任務"))
+          .child(div().text_size(15).font_semibold().child("Asignar tarea")))
         .child(div().text_size(11).text_color(t.dim).child("Esc")))
-      .child(label("¿Qué hay que hacer?"))
-      .child(Input.new(this.input).h(36).px(10).rounded(9).border_1().border_color(this.inputFocused ? t.accent : t.input).bg(t.background).text_size(12.8).text_color(t.foreground))
-      .child(div().pt(6).text_size(11.5).text_color(t.dim).child(where ? `Se abre en «${where}». Sin texto, solo abre el agente.` : "Sin texto, solo abre el agente."))
+      .child(v_flex().pt(14).child(div().h(0.5).w_full().bg(t.border)))
+      .child(this.section("内容", "qué hay que hacer", t))
+      .child(Input.new(this.input).h(38).px(12).rounded(9).border_1().border_color(this.inputFocused ? t.accent : t.border).bg(t.background).text_size(12.8).text_color(t.foreground))
+      .child(div().pt(6).text_size(11).font_light().text_color(t.dim).child(where ? `Se abre en «${where}». Sin texto, solo abre el agente.` : "Sin texto, solo abre el agente."))
+      .child(this.section("道", "dónde", t))
       .child(this.worktreeBox(t, available, note))
-      .child(label("Agente"))
-      .children(choices.length
-        ? agentRows.map((row, r) => h_flex().gap(8).pb(r < agentRows.length - 1 ? 8 : 0)
-          .children(row.map((a) => this.chip(`agent-${a.key}`, a.name, chosen?.key === a.key, (_e, cx) => { this.agent = a.key; cx.notify(); }, t))))
-        : [div().text_size(11.5).text_color(t.dim).child(this.failed ? "No se pudo comprobar qué agentes hay instalados" : "Buscando agentes…")])
-      .child(label("Personaje"))
-      .children(faceRows.map((row, r) => h_flex().gap(4).pb(r < faceRows.length - 1 ? 8 : 0)
-        .children(row.map((c) => this.face(c, (c.file ?? null) === this.character, t, (_e, cx) => { this.character = c.file ?? null; cx.notify(); })))))
-      .child(h_flex().pt(20).gap(8).justify_end()
+      .child(this.section("使者", "agente", t))
+      .child(choices.length
+        ? v_flex().gap(8).children(agentRows.map((row) => h_flex().gap(8)
+          .children(pad(row, agentRows[0].length).map((a) => a
+            ? this.chip(`agent-${a.key}`, a.name, chosen?.key === a.key, (_e, cx) => { this.agent = a.key; cx.notify(); }, t) : div().flex_1()))))
+        : div().text_size(11.5).font_light().text_color(t.dim).child(this.failed ? "No se pudo comprobar qué agentes hay instalados" : "Buscando agentes…"))
+      .child(this.section("人物", "personaje", t))
+      .child(v_flex().gap(10).children(faces.map((row) => h_flex().w_full().justify_between()
+        .children(pad(row, faces[0].length).map((c) => c
+          ? this.face(c, (c.file ?? null) === this.character, t, (_e, cx) => { this.character = c.file ?? null; cx.notify(); }) : div().w(FACE_W).flex_none())))))
+      .child(h_flex().pt(22).gap(10)
         .child(this.button("task-cancel", "Cancelar", false, () => closeOverlay(p.overlay), t))
         .child(this.button("task-go", "Lanzar", true, () => this.submit(), t)));
   }

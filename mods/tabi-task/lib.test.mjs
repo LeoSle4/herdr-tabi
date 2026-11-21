@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { agentChoices, characterChoices, rows, buildLaunch, slugName, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
+import { agentChoices, characterChoices, rows, buildLaunch, slugName, slugWords, balancedRows, branchFor, acceptsPrompt, promptArg, worktreeAvailable, buildWorktree } from "./lib.js";
 
 const known = [
   { key: "claude", name: "Claude Code", run: ["claude"], installed: true },
@@ -67,12 +67,6 @@ test("slugName: a safe lowercase word for a branch, without accents or symbols",
   assert.equal(slugName("a".repeat(60)).length, 24);
 });
 
-test("branchFor: tabi/<who>-<id>, named after the character or the agent", () => {
-  assert.equal(branchFor({ name: "Koyun" }, { name: "Claude Code" }, "3f9a"), "tabi/koyun-3f9a");
-  assert.equal(branchFor(null, { name: "Codex" }, "0001"), "tabi/codex-0001");
-  assert.equal(branchFor(null, null, "ab12"), "tabi/tarea-ab12");
-});
-
 test("acceptsPrompt: only agents that take the first message as an argument", () => {
   assert.equal(acceptsPrompt({ key: "claude" }), true);
   assert.equal(acceptsPrompt({ key: "account-claude2" }), true);
@@ -123,4 +117,47 @@ test("buildWorktree: no task is no first message; a dash in front is neutralized
   assert.deepEqual(buildWorktree({ task: "--help", agent, branch: "b" }).overlay.props.argv, ["/h/.local/bin/claude2", " --help"]);
   assert.equal(buildWorktree({ task: "x", agent: null, branch: "b" }), null);
   assert.equal(buildWorktree({ task: "x", agent, branch: "" }), null);
+});
+
+test("balancedRows: rows of the same length where possible, never a lonely last one", () => {
+  const n = (k) => Array.from({ length: k }, (_, i) => i);
+  assert.deepEqual(balancedRows(n(7), 7).map((r) => r.length), [7]); // all the characters on one row
+  assert.deepEqual(balancedRows(n(7), 5).map((r) => r.length), [4, 3]); // not 5 + 2
+  assert.deepEqual(balancedRows(n(4), 3).map((r) => r.length), [2, 2]); // four agents as a 2 x 2 grid
+  assert.deepEqual(balancedRows(n(3), 3).map((r) => r.length), [3]);
+  assert.deepEqual(balancedRows(n(5), 3).map((r) => r.length), [3, 2]);
+  assert.deepEqual(balancedRows(n(1), 3).map((r) => r.length), [1]);
+  assert.deepEqual(balancedRows([], 3), []);
+  assert.deepEqual(balancedRows(n(8), 7).map((r) => r.length), [4, 4]);
+});
+
+test("slugWords: the first words of a task as a readable piece of a branch name", () => {
+  assert.equal(slugWords("di hola en una línea"), "di-hola-en-una");
+  assert.equal(slugWords("  Arregla el LOGIN, por favor!  "), "arregla-el-login-por");
+  assert.equal(slugWords("Revisa ñandú y añade tests"), "revisa-nandu-y-anade");
+  assert.equal(slugWords("--dangerously-skip-permissions"), "dangerously-skip-permissions");
+  assert.equal(slugWords("¿¿¿???"), "");
+  assert.equal(slugWords(""), "");
+  assert.equal(slugWords(undefined), "");
+  assert.ok(slugWords("a".repeat(80)).length <= 28);
+  assert.equal(slugWords("uno-dos tres cuatro cinco seis"), "uno-dos-tres-cuatro");
+});
+
+test("branchFor: tabi/<character or agent>-<what the task says>, readable", () => {
+  assert.equal(branchFor({ name: "Koyun" }, { name: "Claude Code" }, "di hola en una línea"), "tabi/koyun-di-hola-en-una");
+  assert.equal(branchFor(null, { name: "Codex" }, "Arregla el login"), "tabi/codex-arregla-el-login");
+  assert.equal(branchFor({ name: "Mai" }, null, ""), "tabi/mai"); // no task: just the name
+  assert.equal(branchFor(null, null, undefined), "tabi/tarea");
+});
+
+test("branchFor: a number is added only when the branch already exists, and only the first free one", () => {
+  const taken = ["main", "tabi/koyun-di-hola-en-una"];
+  assert.equal(branchFor({ name: "Koyun" }, null, "di hola en una línea", taken), "tabi/koyun-di-hola-en-una-2");
+  assert.equal(branchFor({ name: "Koyun" }, null, "di hola en una línea", [...taken, "tabi/koyun-di-hola-en-una-2"]), "tabi/koyun-di-hola-en-una-3");
+  assert.equal(branchFor({ name: "Koyun" }, null, "otra cosa", taken), "tabi/koyun-otra-cosa"); // no clash: no number
+  assert.equal(branchFor({ name: "Mai" }, null, "", ["tabi/mai"]), "tabi/mai-2");
+});
+
+test("branchFor: an existing branch of somebody else never decides the name by prefix", () => {
+  assert.equal(branchFor({ name: "Mai" }, null, "arregla", ["tabi/mai-arregla-todo"]), "tabi/mai-arregla"); // different branch, same start
 });
