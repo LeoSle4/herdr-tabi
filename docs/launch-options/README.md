@@ -14,11 +14,22 @@ What you choose is kept **per agent** in `data/tabi/launch.json` until you chang
 version of the panel) and by **Asignar tarea…**, which shows it under the agents ("Modelo y esfuerzo: opus · high"). The gear is lit
 when something is chosen, and the tooltip of the button says what.
 
+## Changing a session that is already running (⇄)
+
+Next to the status of the card of a **Claude Code** agent there is a **⇄**. It opens **調 · Cambiar en la sesión**: pick a model or an
+effort and press **Escribir /model …** or **Escribir /effort …**. tabi **types the command into that agent** (`/model sonnet`,
+`/effort high`) and you press **Enter** there: it cannot press it for you. So you can start with Opus to plan and move to Sonnet to
+talk, in the same conversation, without typing the command yourself.
+
+- It writes through the clipboard (`terminal.paste`), and **puts your clipboard back** as it was (its text; an image on the
+  clipboard is not kept). If it cannot read the clipboard it does nothing.
+- One command at a time: a model, then (after Enter) the effort. Two lines in one paste would be sent as a single message.
+- Only **Claude Code**, only on **this macOS computer**, and only when the agent is **not working or waiting for you**: the dialog
+  says why when it cannot. Codex has its own `/model` picker, which tabi does not drive.
+
 ## Limits
 
-- It is for **starting** an agent. It does not change a session that is already running: for that, `/model` and `/effort` inside
-  Claude Code. (Resuming the same conversation with another model, `claude --resume <id> --model …`, would need the session id,
-  which the hooks do not record yet.)
+- The ⚙ is for **starting** an agent; for one that is running use the ⇄ above (or `/model` and `/effort` yourself).
 - Only this computer: the list of Codex models is read from here.
 - A value that could be taken for a flag or a shell (anything but letters, digits, dot, dash and underscore) is dropped when the file
-  is read.
+  is read, and the command typed into an agent is only ever `/model <name>` or `/effort <level>`.

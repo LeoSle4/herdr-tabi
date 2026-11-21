@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
+import { slashCommand, canSwitch, switchSession, familyOf, prefKey, parseCodexModels, optionsFor, parsePrefs, setChoice, launchArgv, summary, CLAUDE_MODELS, CLAUDE_EFFORTS } from "./lib.js";
 
 const cache = JSON.stringify({
   models: [
@@ -120,4 +120,76 @@ test("the copies in tabi-panel and tabi-task behave like the original", () => {
       for (const k of keys) assert.deepEqual(copy.launchArgv(k, ["run"], { [k]: c }), launchArgv(k, ["run"], { [k]: c }));
     }
   }
+});
+
+test("slashCommand: the command that changes the model or the effort inside Claude Code, only for values that are safe", () => {
+  assert.equal(slashCommand("model", "sonnet"), "/model sonnet");
+  assert.equal(slashCommand("model", "claude-opus-4-5"), "/model claude-opus-4-5");
+  assert.equal(slashCommand("effort", "high"), "/effort high");
+  assert.equal(slashCommand("effort", "turbo"), null); // not a level Claude has
+  assert.equal(slashCommand("model", "x; rm -rf ~"), null);
+  assert.equal(slashCommand("model", "--bad"), null);
+  assert.equal(slashCommand("model", ""), null);
+  assert.equal(slashCommand("model", null), null);
+  assert.equal(slashCommand("nope", "x"), null);
+});
+
+test("canSwitch: only Claude Code on this macOS computer, and not while it is working", () => {
+  assert.deepEqual(canSwitch({ key: "claude", platform: "macos", address: "t1k", status: "idle" }), { ok: true });
+  assert.equal(canSwitch({ key: "account-claude2", platform: "macos", address: "t1k", status: "done" }).ok, true);
+  assert.match(canSwitch({ key: "codex", platform: "macos", address: "t1k", status: "idle" }).reason, /Claude/);
+  assert.match(canSwitch({ key: "claude", platform: "windows", address: "t1k", status: "idle" }).reason, /macOS/);
+  assert.match(canSwitch({ key: "claude", platform: "macos", address: "msi-casa/t5", status: "idle" }).reason, /equipo/);
+  assert.match(canSwitch({ key: "claude", platform: "macos", address: "t1k", status: "working" }).reason, /trabajando/);
+  assert.match(canSwitch({ key: "claude", platform: "macos", address: "t1k", status: "blocked" }).reason, /espera/);
+});
+
+function fakes({ clip = "my clipboard", failPaste = false, failRead = false } = {}) {
+  const log = [];
+  let clipboard = clip;
+  return {
+    log,
+    clipboard: () => clipboard,
+    deps: {
+      exec: async (command, args) => {
+        if (command === "pbpaste") { log.push("read"); if (failRead) throw new Error("no clipboard"); return { code: 0, stdout: clipboard, stderr: "" }; }
+        if (command === "sh") { clipboard = args[3]; log.push(`write:${args[3]}`); return { code: 0, stdout: "", stderr: "" }; }
+        throw new Error(`unexpected ${command}`);
+      },
+      run: (command, a) => { if (command === "terminal.paste" && failPaste) throw new Error("paste failed"); log.push(command === "pane.focus" ? `focus:${a.pane}` : command); },
+      wait: async () => { log.push("wait"); },
+    },
+  };
+}
+
+test("switchSession: puts the command in the clipboard, focuses the agent, pastes it, and gives the clipboard back", async () => {
+  const f = fakes();
+  const r = await switchSession(f.deps, { pane: "p9", text: "/model sonnet", platform: "macos" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(f.log.filter((x) => x !== "wait"), ["read", "write:/model sonnet", "focus:p9", "terminal.paste", "write:my clipboard"]);
+  assert.equal(f.clipboard(), "my clipboard");
+});
+
+test("switchSession: the clipboard comes back even when the paste fails, and the failure is reported", async () => {
+  const f = fakes({ failPaste: true });
+  const r = await switchSession(f.deps, { pane: "p9", text: "/model sonnet", platform: "macos" });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /paste failed/);
+  assert.equal(f.clipboard(), "my clipboard");
+});
+
+test("switchSession: when the clipboard cannot be read nothing is overwritten and nothing is pasted", async () => {
+  const f = fakes({ failRead: true });
+  const r = await switchSession(f.deps, { pane: "p9", text: "/model sonnet", platform: "macos" });
+  assert.equal(r.ok, false);
+  assert.equal(f.clipboard(), "my clipboard");
+  assert.equal(f.log.includes("terminal.paste"), false);
+});
+
+test("switchSession: refuses a platform it has no clipboard tools for, and a text that is not a slash command", async () => {
+  const f = fakes();
+  assert.equal((await switchSession(f.deps, { pane: "p9", text: "/model sonnet", platform: "windows" })).ok, false);
+  assert.equal((await switchSession(f.deps, { pane: "p9", text: "rm -rf ~", platform: "macos" })).ok, false);
+  assert.equal((await switchSession(f.deps, { pane: "p9", text: "/model sonnet\n/effort high", platform: "macos" })).ok, false);
+  assert.deepEqual(f.log, []);
 });
