@@ -12,7 +12,7 @@ import { v_flex, h_flex } from "gpui-base";
 import * as fs from "fs/promises";
 import { agents, spaces, settings, home, run, theme, checking, layout, appHome, exec, shared, setShared, notify, window as herdrWindow } from "herdr";
 import { parseRecord, visibleRows, rowInfo } from "./subagents.js";
-import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
+import { statusInfo, accountNames, cardName, characterName, subtitle, taskLine, worktreesRoot, groupAgents, parseTask, taskFor, finishTask, taskTooltip, parseStop, taskEnded, parseCommand, verifyDir, checkResult, needsCheck, checkMark, checkNotice, CHECK_TIMEOUT_MS, isImage, reconcilePortraits, thumbName, cropSide, parseFolder, accountOf } from "./lib.js";
 
 const THUMB = 96; // px of the cached thumbnail: sharp at the card's 34 px, also on a 2x screen
 const srcDir = () => `${home()}/Documents/retratos`;
@@ -29,6 +29,8 @@ const powershell = (...args) =>
 
 const W = 216;
 const H = 64;
+const PASS_COLOR = "#6fbf8a"; // the tick of a check that passed
+const FAIL_COLOR = "#e0646a"; // the cross of one that failed
 const CH = 44; // a compact card: the agent of a worktree
 const INDENT = 24; // what the tree takes on the left: its line and the branch into each card
 const GAP = 4; // between the cards of a tree
@@ -148,11 +150,37 @@ export default class TabiParty extends View {
       if (!done) continue;
       try { await fs.writeFile(`${tasksDir()}/${rec.id}.json`, JSON.stringify(done)); records[i] = done; } catch { /* try again on the next round */ }
     }
+    for (let i = 0; i < records.length; i++) if (needsCheck(records[i], now)) records[i] = await this.runCheck(records[i]);
     const key = JSON.stringify(records);
     const changed = key !== this.tasksKey;
     this.tasks = records;
     this.tasksKey = key;
     return changed;
+  }
+
+  /**
+   * Runs the check of a finished task (its `verify` command, with no shell) where its work is and records what it found: first
+   * "running" (so no other round starts it again), then pass or fail, with a notice. Returns the record as it ends up.
+   */
+  async runCheck(rec) {
+    const save = async (next) => { try { await fs.writeFile(`${tasksDir()}/${rec.id}.json`, JSON.stringify(next)); } catch { /* the next round writes it */ } return next; };
+    const now = Date.now();
+    await save({ ...rec, check: { state: "running", at: now } });
+    const cmd = parseCommand(rec.verify);
+    const agent = agents().find((x) => taskFor([rec], x.tab_name, this.machineOf(x), now));
+    let result;
+    if (!cmd) result = checkResult(null, "comando no válido", Date.now());
+    else {
+      try {
+        const r = await exec(cmd.command, cmd.args, { cwd: verifyDir(rec, agent && this.spaceOf(agent)?.folder) ?? undefined, timeout: CHECK_TIMEOUT_MS });
+        result = checkResult(r.code, r.code === 0 ? r.stdout : (r.stderr || r.stdout), Date.now());
+      } catch (e) {
+        result = checkResult(null, String(e?.message ?? e), Date.now());
+      }
+    }
+    const done = await save({ ...rec, check: result });
+    try { notify(checkNotice(done, result)); } catch { /* the mark on the card says it too */ }
+    return done;
   }
 
   /** The machine of an agent's space (null = this computer). */
@@ -362,11 +390,20 @@ export default class TabiParty extends View {
           .child(h_flex().justify_between().items_baseline()
             .child(div().id(`name-${a.address}`).truncate().text_size(12.5).text_color(a.focused ? t.foreground : t.muted)
               .when(name !== account, (el) => el.tooltip(`${name} · ${account}`)).child(name))
-            .child(div().text_size(13).text_color(accent).child(s.kanji)))
+            .child(this.statusMark(a, s, accent, t)))
           .child(div().truncate().text_size(11).font_light().text_color(t.dim).child(subtitle(a)))
           .child(track)))
       .child(svg("mods/tabi-party/cut.svg").absolute().top(0).right(0).w(14).h(H).text_color(t.chrome))
       .child(svg("mods/tabi-party/cut-line.svg").absolute().top(0).right(0).w(14).h(H).text_color(t.input));
+  }
+
+  /** The status kanji of a card, with the mark of its task's check before it (✓ passed, ✗ failed, … being checked). */
+  statusMark(a, s, accent, t) {
+    const mark = checkMark(this.taskOf(a));
+    const color = mark === "✓" ? PASS_COLOR : mark === "✗" ? FAIL_COLOR : t.dim;
+    return h_flex().gap(6).items_baseline().flex_none()
+      .when(Boolean(mark), (el) => el.child(div().text_size(12).text_color(color).child(mark)))
+      .child(div().text_size(13).text_color(accent).child(s.kanji));
   }
 
   /**
@@ -392,7 +429,7 @@ export default class TabiParty extends View {
         .child(v_flex().flex_1().min_w(0).gap(1)
           .child(h_flex().justify_between().items_baseline().gap(6)
             .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(a.focused ? t.foreground : t.muted).child(name))
-            .child(div().flex_none().text_size(12).text_color(accent).child(s.kanji)))
+            .child(this.statusMark(a, s, accent, t)))
           .child(h_flex().gap(4).items_center()
             .child(svg("mods/workspace-chrome/branch.svg").size(10).flex_none().text_color(t.accent))
             .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).child(wt.branch)))));

@@ -60,6 +60,18 @@ the agent, the character, the branch (with a worktree), the folder and the machi
   and if two tabs share the name it waits for all of them, so a task is closed late rather than too soon.
 - Only the last 60 records are read. Delete a file to delete its record.
 
+## Check it when it ends (optional)
+
+The field **確 · comprobar al terminar** takes one command, for example `node --test` or `python3 -m unittest`. When the agent ends, tabi
+runs it in the agent's folder (the worktree's checkout, or the folder where you gave the task) and records what it found:
+
+- **✓** it exited with 0, **✗** it did not (or it could not run, or took more than 5 minutes). The card shows it before the status
+  kanji and its tooltip says "Comprobación (<command>): ✓ <last line it printed>". A toast says it too.
+- It is **one command with no shell**: no pipes, no `&&`, no variables. Quotes group an argument with spaces. For something longer,
+  put it in a script and run that.
+- Only for this computer: with a remote machine's space the field is not offered.
+- "Terminó de responder" is not "pasó los tests": that is what this is for.
+
 ## Limits
 
 - The task is one line (the dialog has a single-line field). Paste a longer one, or put it in a file and say so in the task.

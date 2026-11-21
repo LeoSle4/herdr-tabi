@@ -226,3 +226,12 @@ test("fadeSteps: a color that is not #rrggbb gives no fade rather than a broken 
   assert.deepEqual(fadeSteps(undefined, 4), []);
   assert.deepEqual(fadeSteps("#1c2129", 0), []);
 });
+
+test("newTaskRecord: the check command is saved trimmed, and null when there is none", () => {
+  const r = newTaskRecord({ task: "x", agent: claude, now: 1, rnd: "0000", verify: "  node --test  " });
+  assert.equal(r.verify, "node --test");
+  assert.equal(r.check, null);
+  assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1, verify: "   " }).verify, null);
+  assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1 }).verify, null);
+  assert.equal(newTaskRecord({ task: "x", agent: claude, now: 1, verify: "a".repeat(500) }).verify.length, 200);
+});

@@ -242,7 +242,13 @@ export function taskTooltip(rec) {
   if (!rec) return "";
   const asked = `Encargo: ${rec.task}`;
   if (rec.status !== "done") return asked;
-  return `${asked}\n${rec.result ? `Resultado: ${rec.result}` : "Terminó"}`;
+  const lines = [asked, rec.result ? `Resultado: ${rec.result}` : "Terminó"];
+  if (rec.verify) {
+    const c = rec.check;
+    const found = !c || c.state === "running" ? "comprobando…" : `${c.state === "pass" ? "✓" : "✗"}${c.tail ? ` ${c.tail}` : ""}`;
+    lines.push(`Comprobación (${rec.verify}): ${found}`);
+  }
+  return lines.join("\n");
 }
 
 /** The `_stop.json` the hook writes when a turn ends (tools/tabi_subagents.py): { text, at }, or null. */
@@ -264,4 +270,63 @@ export function taskEnded(status, sawWorking, rec, now) {
   if (status === "done") return true;
   if (status !== "idle") return false;
   return sawWorking || now - rec.startedAt > IDLE_ENDS_MS;
+}
+
+/** How long a check may run: a longer one is killed, and a "running" mark older than that was left by a Herdr that closed. */
+export const CHECK_TIMEOUT_MS = 5 * 60000;
+
+/**
+ * Splits the command of a check into what `exec` takes (no shell: no pipes, no &&, no variables). Quotes group an argument with spaces.
+ * Null when there is no command or a quote is left open.
+ */
+export function parseCommand(text) {
+  const out = [];
+  let cur = "";
+  let quote = null;
+  let any = false;
+  for (const ch of String(text ?? "")) {
+    if (quote) {
+      if (ch === quote) quote = null; else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch; any = true;
+    } else if (/\s/.test(ch)) {
+      if (cur || any) out.push(cur);
+      cur = ""; any = false;
+    } else cur += ch;
+  }
+  if (quote) return null;
+  if (cur || any) out.push(cur);
+  return out.length ? { command: out[0], args: out.slice(1) } : null;
+}
+
+/** Where a task is checked: a worktree where it lives (`spaceFolder`, the folder of the agent's space), any other where it was given. */
+export function verifyDir(rec, spaceFolder) {
+  return (rec.branch && spaceFolder) || rec.folder || null;
+}
+
+/** What a check found: pass when it exited with 0, fail otherwise (also when it never ran to the end), and the last line it printed. */
+export function checkResult(code, output, now) {
+  const last = String(output ?? "").split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+  return { state: code === 0 ? "pass" : "fail", code: code ?? null, at: now, tail: last.slice(0, 140) };
+}
+
+/** Does this task have a check to run? Only a finished one with a command and no result (or one left running by a closed Herdr). */
+export function needsCheck(rec, now = Date.now()) {
+  if (rec.status !== "done" || !rec.verify) return false;
+  if (!rec.check) return true;
+  return rec.check.state === "running" && now - rec.check.at > CHECK_TIMEOUT_MS;
+}
+
+/** The mark on a card: ✓ it passed, ✗ it failed, … it is being checked; nothing when the task has no check or is not done. */
+export function checkMark(rec) {
+  if (!rec?.verify || rec.status !== "done") return "";
+  if (!rec.check || rec.check.state === "running") return "…";
+  return rec.check.state === "pass" ? "✓" : "✗";
+}
+
+/** The notice for a finished check: the character (or agent) it is about, whether it passed and the last thing the command printed. */
+export function checkNotice(rec, check) {
+  const who = rec.character ?? rec.agent;
+  const pass = check.state === "pass";
+  return { title: `${who}: la comprobación ${pass ? "pasó ✓" : "falló ✗"}`, body: [rec.verify, check.tail].filter(Boolean).join(" · "), level: pass ? "success" : "error" };
 }
